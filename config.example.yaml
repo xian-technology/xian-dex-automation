@@ -1,0 +1,34 @@
+network:
+  rpc_url: "http://127.0.0.1:26657"
+  chain_id: null
+  watcher_mode: "auto"
+  poll_interval_seconds: 1.0
+
+dex:
+  router_contract: "con_dex"
+  pairs_contract: "con_pairs"
+
+wallet:
+  private_key_env: "XIAN_DEX_AUTOMATION_PRIVATE_KEY"
+  private_key_file: null
+  private_key_file_env: "XIAN_DEX_AUTOMATION_PRIVATE_KEY_FILE"
+  execute: false
+  recipient: null
+
+database_path: "state/xian-dex-automation.sqlite3"
+
+rules:
+  - id: "demo-price-move"
+    enabled: true
+    trigger:
+      type: "price_move"
+      pair_id: 1
+      direction: "either"
+      threshold_bps: 100
+      cooldown_seconds: 300
+    action:
+      type: "swap_exact_in"
+      src: "currency"
+      amount_in: "1"
+      max_slippage_bps: 100
+      deadline_seconds: 300

@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xian-dex-automation"
+version = "0.1.0"
+description = "Deterministic automation service for Xian DEX events"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.116.0,<0.117",
+    "pydantic>=2.10.0,<3",
+    "PyYAML>=6.0.0,<7",
+    "uvicorn[standard]>=0.35.0,<0.36",
+    "xian-tech-py>=0.4.14,<0.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28.0,<0.29",
+    "pytest>=9.0.0,<10",
+    "ruff>=0.15.0,<0.16",
+]
+
+[project.scripts]
+xian-dex-automation = "xian_dex_automation.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: requires a running Xian node with DEX contracts and a liquid pair",
+]
+
+[tool.ruff]
+line-length = 80
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
