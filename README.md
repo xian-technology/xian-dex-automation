@@ -11,6 +11,22 @@ It is deliberately separate from neighbouring projects:
 - `xian-intentkit` — agent workflows where an AI model decides what to do.
 - `xian-dex` (the DEX website) — the human trading and liquidity UI.
 
+## Service Shape
+
+```mermaid
+flowchart LR
+  Node["Xian node"] --> Events["DEX pair events"]
+  Events --> Worker["Event worker"]
+  Worker --> Rules["Rule evaluator"]
+  Rules --> DryRun["Dry-run run log"]
+  Rules -->|when enabled| Wallet["Automation wallet"]
+  Wallet --> DEX["con_dex trade"]
+  API["Admin API"] --> Rules
+  UI["Admin UI"] --> API
+  Storage["SQLite state"] --> Worker
+  Worker --> Storage
+```
+
 ## Quick Start
 
 Set up a local environment:
