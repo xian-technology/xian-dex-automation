@@ -74,7 +74,9 @@ def evaluate_price_move(
             next_baseline_price=current_price,
         )
 
-    change_bps = ((current_price - state.baseline_price) / state.baseline_price) * BPS
+    change_bps = (
+        (current_price - state.baseline_price) / state.baseline_price
+    ) * BPS
     trigger = rule.trigger
     if not _threshold_reached(
         direction=trigger.direction,
@@ -110,4 +112,3 @@ def evaluate_price_move(
         change_bps=change_bps,
         next_baseline_price=current_price,
     )
-

@@ -155,7 +155,9 @@ class DexClient:
         await self._client.__aenter__()
         return self
 
-    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+    async def __aexit__(
+        self, exc_type: object, exc: object, tb: object
+    ) -> None:
         if self._client is not None:
             await self._client.__aexit__(exc_type, exc, tb)
         self._client = None
@@ -224,9 +226,7 @@ class DexClient:
         if recipient is None:
             raise DexAutomationError("swap recipient is not configured")
 
-        return await self.client.contract(
-            self.config.dex.router_contract
-        ).send(
+        return await self.client.contract(self.config.dex.router_contract).send(
             "swapExactTokenForToken",
             amountIn=float(action.amount_in),
             amountOutMin=float(amount_out_min),

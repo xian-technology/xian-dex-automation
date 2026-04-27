@@ -53,8 +53,14 @@ def _validate_private_key(private_key: str) -> str:
     return value
 
 
-def _write_private_key_file(path: Path, private_key: str, *, overwrite: bool) -> None:
-    if path.exists() and path.read_text(encoding="utf-8").strip() and not overwrite:
+def _write_private_key_file(
+    path: Path, private_key: str, *, overwrite: bool
+) -> None:
+    if (
+        path.exists()
+        and path.read_text(encoding="utf-8").strip()
+        and not overwrite
+    ):
         raise HTTPException(
             status_code=409,
             detail="wallet key file already exists",
@@ -552,7 +558,9 @@ def create_app(
         save_config(new_config, app.state.config_path)
         apply_config(new_config)
 
-    def normalized_for_persist(new_config: AutomationConfig) -> AutomationConfig:
+    def normalized_for_persist(
+        new_config: AutomationConfig,
+    ) -> AutomationConfig:
         if app.state.config_path is None:
             raise HTTPException(
                 status_code=409,
@@ -604,7 +612,9 @@ def create_app(
             "recipient": current.wallet.recipient,
         }
 
-    def persist_wallet_key(private_key: str, *, overwrite: bool) -> dict[str, Any]:
+    def persist_wallet_key(
+        private_key: str, *, overwrite: bool
+    ) -> dict[str, Any]:
         if app.state.config_path is None:
             raise HTTPException(
                 status_code=409,
@@ -640,9 +650,7 @@ def create_app(
 
     @app.get("/rules")
     async def rules() -> list[dict[str, Any]]:
-        return [
-            rule.model_dump(mode="json") for rule in app.state.config.rules
-        ]
+        return [rule.model_dump(mode="json") for rule in app.state.config.rules]
 
     @app.put("/rules/{rule_id}")
     async def upsert_rule(rule_id: str, rule: RuleConfig) -> dict[str, Any]:

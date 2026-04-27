@@ -176,4 +176,3 @@ class AutomationStore:
                 """,
                 (name, cursor, _utc_now_iso()),
             )
-

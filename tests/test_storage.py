@@ -40,4 +40,3 @@ def test_runs_and_cursor_round_trip(tmp_path) -> None:
     runs = store.list_runs()
     assert runs[0]["status"] == "dry_run"
     assert runs[0]["details"] == {"pair_id": 1}
-

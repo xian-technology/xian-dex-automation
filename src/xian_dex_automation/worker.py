@@ -85,7 +85,10 @@ class AutomationWorker:
             "execute_enabled": self.config.wallet.execute,
         }
 
-        if decision.next_baseline_price is not None and not decision.should_execute:
+        if (
+            decision.next_baseline_price is not None
+            and not decision.should_execute
+        ):
             self.store.save_rule_state(
                 rule.id,
                 RuleRuntimeState(

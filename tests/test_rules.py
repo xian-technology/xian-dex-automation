@@ -89,4 +89,3 @@ def test_cooldown_blocks_repeated_actions() -> None:
 
     assert decision.should_execute is False
     assert decision.reason == "cooldown_active"
-

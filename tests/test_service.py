@@ -83,7 +83,9 @@ def test_wallet_patch_persists(tmp_path) -> None:
     assert saved.wallet.recipient == "abc"
 
 
-def test_generate_wallet_key_persists_file_and_disables_execution(tmp_path) -> None:
+def test_generate_wallet_key_persists_file_and_disables_execution(
+    tmp_path,
+) -> None:
     client, config_path = make_client(tmp_path)
     client.patch("/wallet", json={"execute": True})
 
@@ -99,7 +101,9 @@ def test_generate_wallet_key_persists_file_and_disables_execution(tmp_path) -> N
     assert load_config(config_path).wallet.execute is False
 
 
-def test_generate_wallet_key_requires_overwrite_for_existing_key(tmp_path) -> None:
+def test_generate_wallet_key_requires_overwrite_for_existing_key(
+    tmp_path,
+) -> None:
     client, _config_path = make_client(tmp_path)
     first = client.post("/wallet/generate", json={"overwrite": False})
     assert first.status_code == 200
