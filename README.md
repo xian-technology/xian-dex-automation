@@ -33,34 +33,32 @@ Set up a local environment:
 
 ```bash
 cd xian-dex-automation
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install -e '.[dev]'
+uv sync --extra dev
 cp config.example.yaml config.yaml
 ```
 
 Validate the config:
 
 ```bash
-xian-dex-automation validate-config --config config.yaml
+uv run xian-dex-automation validate-config --config config.yaml
 ```
 
 Run the API (admin UI at `http://127.0.0.1:8787`):
 
 ```bash
-xian-dex-automation serve --config config.yaml --host 127.0.0.1 --port 8787
+uv run xian-dex-automation serve --config config.yaml --host 127.0.0.1 --port 8787
 ```
 
 Run the worker:
 
 ```bash
-xian-dex-automation run-worker --config config.yaml
+uv run xian-dex-automation run-worker --config config.yaml
 ```
 
 For local operator testing, run API + worker in one process:
 
 ```bash
-xian-dex-automation serve --config config.yaml --host 127.0.0.1 --port 8787 --with-worker
+uv run xian-dex-automation serve --config config.yaml --host 127.0.0.1 --port 8787 --with-worker
 ```
 
 ### Enabling Execution
