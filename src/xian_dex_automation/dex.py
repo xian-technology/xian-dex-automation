@@ -36,7 +36,8 @@ def _resolve_private_key(
 
     key_path = key_file if isinstance(key_file, str) else str(key_file)
     try:
-        value = open(key_path, encoding="utf-8").read().strip()
+        with open(key_path, encoding="utf-8") as key_file_obj:
+            value = key_file_obj.read().strip()
     except OSError as exc:
         raise DexAutomationError(
             f"unable to read automation wallet key file: {key_path}"
@@ -116,7 +117,7 @@ class DexClient:
         self._client: Any | None = None
         self.wallet_address: str | None = None
 
-    async def __aenter__(self) -> "DexClient":
+    async def __aenter__(self) -> DexClient:
         install_contracting_decimal_context()
 
         from xian_py import (

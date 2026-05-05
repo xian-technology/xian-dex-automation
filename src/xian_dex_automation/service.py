@@ -67,10 +67,8 @@ def _write_private_key_file(
         )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"{private_key.strip()}\n", encoding="utf-8")
-    try:
+    with suppress(OSError):
         path.chmod(0o600)
-    except OSError:
-        pass
 
 
 def _index_html() -> str:
