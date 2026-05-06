@@ -8,4 +8,4 @@ build/
 dist/
 state/
 *.sqlite3
-
+.DS_Store
