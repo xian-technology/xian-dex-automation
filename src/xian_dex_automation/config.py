@@ -67,24 +67,39 @@ class AutomationConfig(BaseModel):
     rules: list[RuleConfig] = Field(default_factory=list)
 
 
+def _resolve_relative_path(path: Path, *, base_dir: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return base_dir / path
+
+
+def _resolve_optional_relative_path(
+    path: Path | None,
+    *,
+    base_dir: Path,
+) -> Path | None:
+    if path is None:
+        return None
+    return _resolve_relative_path(path, base_dir=base_dir)
+
+
 def normalize_config_paths(
     config: AutomationConfig,
     *,
     config_path: str | Path,
 ) -> AutomationConfig:
     resolved_config_path = Path(config_path).resolve()
-    if not config.database_path.is_absolute():
-        config.database_path = (
-            resolved_config_path.parent / config.database_path
-        )
-    if (
-        config.wallet.private_key_file is not None
-        and not config.wallet.private_key_file.is_absolute()
-    ):
-        config.wallet.private_key_file = (
-            resolved_config_path.parent / config.wallet.private_key_file
-        )
-    return config
+    config_dir = resolved_config_path.parent
+    normalized = config.model_copy(deep=True)
+    normalized.database_path = _resolve_relative_path(
+        normalized.database_path,
+        base_dir=config_dir,
+    )
+    normalized.wallet.private_key_file = _resolve_optional_relative_path(
+        normalized.wallet.private_key_file,
+        base_dir=config_dir,
+    )
+    return normalized
 
 
 def parse_config_text(
