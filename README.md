@@ -83,8 +83,8 @@ optional sidecar:
 
 ```bash
 cd ../xian-stack
-python3 ./scripts/backend.py start     --no-service-node --dex-automation
-python3 ./scripts/backend.py endpoints --no-service-node --dex-automation
+python3 ./scripts/backend.py start     --no-bds-enabled --dex-automation
+python3 ./scripts/backend.py endpoints --no-bds-enabled --dex-automation
 ```
 
 Default URL: `http://127.0.0.1:38280`. The stack-managed path creates a
