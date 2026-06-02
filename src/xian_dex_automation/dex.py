@@ -229,8 +229,8 @@ class DexClient:
 
         return await self.client.contract(self.config.dex.router_contract).send(
             "swapExactTokenForToken",
-            amountIn=float(action.amount_in),
-            amountOutMin=float(amount_out_min),
+            amountIn=action.amount_in,
+            amountOutMin=amount_out_min,
             pair=snapshot.pair_id,
             src=action.src,
             to=recipient,
