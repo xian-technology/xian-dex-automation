@@ -83,6 +83,40 @@ def test_wallet_patch_persists(tmp_path) -> None:
     assert saved.wallet.recipient == "abc"
 
 
+def test_rule_and_wallet_settings_survive_app_restart(tmp_path) -> None:
+    client, config_path = make_client(tmp_path)
+    rule = {
+        "id": "persisted-rule",
+        "enabled": True,
+        "trigger": {
+            "type": "price_move",
+            "pair_id": 1,
+            "direction": "either",
+            "threshold_bps": 100,
+            "cooldown_seconds": 30,
+        },
+        "action": {
+            "type": "swap_exact_in",
+            "src": "currency",
+            "amount_in": "2.5",
+            "max_slippage_bps": 250,
+            "deadline_seconds": 120,
+        },
+    }
+
+    assert client.put("/rules/persisted-rule", json=rule).status_code == 200
+    assert client.patch("/wallet", json={"execute": True, "recipient": "abc"}).status_code == 200
+
+    restarted_client = TestClient(create_app(load_config(config_path), config_path=config_path))
+
+    rules = restarted_client.get("/rules").json()
+    wallet = restarted_client.get("/wallet").json()
+    assert rules[0]["id"] == "persisted-rule"
+    assert rules[0]["action"]["amount_in"] == "2.5"
+    assert wallet["execute_enabled"] is True
+    assert wallet["recipient"] == "abc"
+
+
 def test_generate_wallet_key_persists_file_and_disables_execution(
     tmp_path,
 ) -> None:
