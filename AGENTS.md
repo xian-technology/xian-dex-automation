@@ -8,7 +8,9 @@
 - Use the browser wallet only in future setup UI flows where a human signs the
   immediate transaction.
 
-## Local Knowledge Graph
-- If `graphify-out/graph.json` exists, prefer `graphify query`, `graphify path`, or `graphify explain` for broad architecture and impact questions before scanning files manually.
-- Treat `graphify-out/` as a generated local artifact; it is intentionally ignored by Git.
-- After structural code changes, refresh the local graph with `graphify update .` when useful.
+## Shared Agent Practices
+- Keep changes clean, modular, and professional. Prefer small, cohesive modules, clear naming, explicit boundaries, and tests over quick patches.
+- When code behavior, public APIs, user workflows, operator workflows, or configuration semantics change, check whether `../xian-docs-web` needs corresponding documentation updates. If this repo is `xian-docs-web`, update the relevant published docs in place. Write durable user/developer documentation, not a changelog entry.
+- For code changes, use graphify when available to check cross-repo impact before finishing: query the local `graphify-out/graph.json`, inspect paths with `graphify path` or `graphify explain`, and refresh with `graphify update .` after structural changes when useful.
+- If graphify or dependency analysis shows affected sibling repos, update those repos in the same change when the impact is real and the fix is in scope.
+- Treat `graphify-out/` as a generated local artifact. Do not commit it.
