@@ -99,9 +99,8 @@ dry-run mode until execution is explicitly enabled.
   `xian-intentkit` if that is what you want.
 - **Browser wallets cannot drive automation.** Browser wallets are
   interactive and require user presence per transaction. Unattended
-  automation uses a dedicated automation wallet (current model) or, in the
-  future, an on-chain strategy / vault that constrains what an off-chain
-  keeper can trigger.
+  automation uses a dedicated automation wallet. A stricter strategy / vault
+  model can constrain what an off-chain keeper can trigger.
 - **Bounded by wallet balance.** The service can only trade funds held by
   its own wallet. Fund it with a deliberately limited budget.
 - **Default to dry-run.** Execution is opt-in. Generated, rotated, or
@@ -114,12 +113,11 @@ dry-run mode until execution is explicitly enabled.
 
 ## Wallet Model
 
-1. **Dedicated automation wallet (available now).** Generate a new wallet,
+1. **Dedicated automation wallet.** Generate a wallet,
    fund it with a limited budget, run this service with that private key.
-2. **On-chain strategy / vault (future hardening).** A user connects a
-   browser wallet, deposits a bounded budget into a strategy contract,
-   and the off-chain keeper can only trigger actions allowed by the
-   contract.
+2. **On-chain strategy / vault.** A user connects a browser wallet, deposits a
+   bounded budget into a strategy contract, and the off-chain keeper can only
+   trigger actions allowed by the contract.
 
 The current implementation uses model 1 and defaults to dry-run.
 
