@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .config import (
@@ -21,6 +22,62 @@ from .config import (
 from .dex import resolve_private_key, resolve_private_key_source
 from .storage import AutomationStore
 from .worker import AutomationWorker
+
+ADMIN_TOKEN_ENV = "XIAN_DEX_AUTOMATION_ADMIN_TOKEN"
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def configured_admin_token() -> str | None:
+    token = os.environ.get(ADMIN_TOKEN_ENV)
+    return _normalize_admin_token(token)
+
+
+def _normalize_admin_token(token: str | None) -> str | None:
+    if token is None:
+        return None
+    token = token.strip()
+    return token or None
+
+
+def _request_origin(request: Request) -> str:
+    return f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
+
+
+def _require_same_origin(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if origin and origin.rstrip("/") != _request_origin(request).rstrip("/"):
+        raise HTTPException(status_code=403, detail="cross-origin admin request rejected")
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site and fetch_site.lower() == "cross-site":
+        raise HTTPException(status_code=403, detail="cross-site admin request rejected")
+
+
+def _require_admin_token(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> None:
+    expected = getattr(request.app.state, "admin_token", None)
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{ADMIN_TOKEN_ENV} is required for the admin API",
+        )
+    prefix = "Bearer "
+    if not authorization or not authorization.startswith(prefix):
+        raise HTTPException(
+            status_code=401,
+            detail="admin bearer token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    supplied = authorization[len(prefix) :].strip()
+    if not hmac.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="invalid admin bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if request.method.upper() in UNSAFE_METHODS:
+        _require_same_origin(request)
 
 
 def _wallet_address(private_key: str | None) -> str | None:
@@ -69,6 +126,17 @@ def _write_private_key_file(
     path.write_text(f"{private_key.strip()}\n", encoding="utf-8")
     with suppress(OSError):
         path.chmod(0o600)
+
+
+def _wallet_key_source_changed(
+    current: AutomationConfig,
+    new_config: AutomationConfig,
+) -> bool:
+    return (
+        current.wallet.private_key_env != new_config.wallet.private_key_env
+        or current.wallet.private_key_file != new_config.wallet.private_key_file
+        or current.wallet.private_key_file_env != new_config.wallet.private_key_file_env
+    )
 
 
 def _index_html() -> str:
@@ -213,6 +281,16 @@ def _index_html() -> str:
         </div>
       </section>
       <section>
+        <h2>Admin Access</h2>
+        <label>Admin token
+          <input id="adminToken" data-testid="admin-token" type="password" autocomplete="off" placeholder="XIAN_DEX_AUTOMATION_ADMIN_TOKEN">
+        </label>
+        <div class="row" style="margin-top: 10px">
+          <button id="saveAdminToken" data-testid="save-admin-token">Unlock</button>
+          <button id="clearAdminToken" data-testid="clear-admin-token" class="secondary">Lock</button>
+        </div>
+      </section>
+      <section>
         <h2>Wallet</h2>
         <div class="grid">
           <label>Execute trades
@@ -223,9 +301,6 @@ def _index_html() -> str:
           </label>
           <label>Recipient override
             <input id="walletRecipient" data-testid="wallet-recipient" placeholder="defaults to automation wallet">
-          </label>
-          <label class="wide">Service wallet key file
-            <input id="walletKeyFile" data-testid="wallet-key-file" placeholder="wallet.key next to config">
           </label>
           <label class="wide">Import service wallet private key
             <input id="importPrivateKey" data-testid="import-private-key" type="password" autocomplete="off" placeholder="dedicated automation wallet only">
@@ -305,6 +380,8 @@ def _index_html() -> str:
   </main>
   <script>
     const $ = (id) => document.getElementById(id);
+    const ADMIN_TOKEN_STORAGE_KEY = "xianDexAutomationAdminToken";
+    const adminToken = () => sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
     const message = (text, cls = "muted") => {
       $("message").className = cls;
       $("message").textContent = text;
@@ -323,7 +400,12 @@ def _index_html() -> str:
       }
     };
     const api = async (path, options = {}) => {
-      const response = await fetch(path, options);
+      const { skipAuth = false, ...fetchOptions } = options;
+      const headers = new Headers(fetchOptions.headers || {});
+      const token = adminToken();
+      if (!skipAuth && token) headers.set("authorization", `Bearer ${token}`);
+      fetchOptions.headers = headers;
+      const response = await fetch(path, fetchOptions);
       const contentType = response.headers.get("content-type") || "";
       const payload = contentType.includes("application/json")
         ? await response.json()
@@ -365,20 +447,29 @@ def _index_html() -> str:
       $("deadlineSeconds").value = rule.action.deadline_seconds;
     };
     const refresh = async () => {
-      const [health, wallet, rules, runs, yaml] = await Promise.all([
-        api("/health"),
+      const health = await api("/health", { skipAuth: true });
+      $("mode").textContent = health.execute_enabled ? "execute" : "dry-run";
+      $("mode").className = health.execute_enabled ? "dangerText" : "ok";
+      $("ruleCount").textContent = health.rules;
+      if (!adminToken()) {
+        $("walletAddress").textContent = "locked";
+        $("walletSource").textContent = "";
+        $("rulesTable").innerHTML = `<tr><td colspan="4" class="empty">Enter the admin token to manage rules</td></tr>`;
+        $("runsTable").innerHTML = `<tr><td colspan="4" class="empty">Enter the admin token to inspect runs</td></tr>`;
+        $("yamlConfig").value = "";
+        $("evaluation").textContent = "";
+        message("Enter the admin token to unlock the admin API.", "muted");
+        return;
+      }
+      const [wallet, rules, runs, yaml] = await Promise.all([
         api("/wallet"),
         api("/rules"),
         api("/runs"),
         api("/config.yaml")
       ]);
-      $("mode").textContent = health.execute_enabled ? "execute" : "dry-run";
-      $("mode").className = health.execute_enabled ? "dangerText" : "ok";
-      $("ruleCount").textContent = health.rules;
       $("walletAddress").textContent = wallet.address || "not configured";
       $("walletExecute").value = String(wallet.execute_enabled);
       $("walletRecipient").value = wallet.recipient || "";
-      $("walletKeyFile").value = wallet.private_key_file || "";
       $("walletSource").textContent = wallet.private_key_source || "no key";
       $("yamlConfig").value = yaml;
       $("rulesTable").innerHTML = rules.length ? rules.map((rule) => `
@@ -440,8 +531,7 @@ def _index_html() -> str:
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             execute: $("walletExecute").value === "true",
-            recipient: $("walletRecipient").value.trim() || null,
-            private_key_file: $("walletKeyFile").value.trim() || null
+            recipient: $("walletRecipient").value.trim() || null
           })
         });
         message("Wallet settings saved", "ok");
@@ -501,6 +591,21 @@ def _index_html() -> str:
       })
     );
     $("reloadYaml").addEventListener("click", () => runAction(refresh));
+    $("adminToken").value = adminToken();
+    $("saveAdminToken").addEventListener("click", () => runAction(async () => {
+        const token = $("adminToken").value.trim();
+        if (!token) throw new Error("Admin token is required");
+        sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+        message("Admin API unlocked for this browser tab", "ok");
+        await refresh();
+      })
+    );
+    $("clearAdminToken").addEventListener("click", () => {
+      sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+      $("adminToken").value = "";
+      message("Admin API locked", "muted");
+      refresh().catch((error) => message(error.message, "dangerText"));
+    });
     refresh().catch((error) => message(error.message, "dangerText"));
   </script>
 </body>
@@ -513,6 +618,7 @@ def create_app(
     *,
     start_worker: bool = False,
     config_path: str | Path | None = None,
+    admin_token: str | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -536,6 +642,11 @@ def create_app(
     )
     app.state.config = config
     app.state.config_path = Path(config_path).resolve() if config_path else None
+    app.state.admin_token = (
+        _normalize_admin_token(admin_token)
+        if admin_token is not None
+        else configured_admin_token()
+    )
     app.state.store = AutomationStore(config.database_path)
     app.state.worker = AutomationWorker(config, app.state.store)
     app.state.worker_task = None
@@ -647,11 +758,17 @@ def create_app(
         }
 
     @app.get("/rules")
-    async def rules() -> list[dict[str, Any]]:
+    async def rules(
+        _admin: None = Depends(_require_admin_token),
+    ) -> list[dict[str, Any]]:
         return [rule.model_dump(mode="json") for rule in app.state.config.rules]
 
     @app.put("/rules/{rule_id}")
-    async def upsert_rule(rule_id: str, rule: RuleConfig) -> dict[str, Any]:
+    async def upsert_rule(
+        rule_id: str,
+        rule: RuleConfig,
+        _admin: None = Depends(_require_admin_token),
+    ) -> dict[str, Any]:
         if rule.id != rule_id:
             raise HTTPException(
                 status_code=400,
@@ -668,7 +785,10 @@ def create_app(
         return rule.model_dump(mode="json")
 
     @app.delete("/rules/{rule_id}")
-    async def delete_rule(rule_id: str) -> dict[str, Any]:
+    async def delete_rule(
+        rule_id: str,
+        _admin: None = Depends(_require_admin_token),
+    ) -> dict[str, Any]:
         current = app.state.config
         rules = [rule for rule in current.rules if rule.id != rule_id]
         if len(rules) == len(current.rules):
@@ -678,18 +798,31 @@ def create_app(
         return {"deleted": rule_id}
 
     @app.get("/runs")
-    async def runs(limit: int = 100) -> list[dict[str, Any]]:
+    async def runs(
+        limit: int = 100,
+        _admin: None = Depends(_require_admin_token),
+    ) -> list[dict[str, Any]]:
         return app.state.store.list_runs(limit=max(1, min(limit, 500)))
 
     @app.get("/wallet")
-    async def wallet() -> dict[str, Any]:
+    async def wallet(
+        _admin: None = Depends(_require_admin_token),
+    ) -> dict[str, Any]:
         return wallet_payload()
 
     @app.patch("/wallet")
-    async def update_wallet(payload: dict[str, Any]) -> dict[str, Any]:
+    async def update_wallet(
+        payload: dict[str, Any],
+        _admin: None = Depends(_require_admin_token),
+    ) -> dict[str, Any]:
+        if "private_key_file" in payload:
+            raise HTTPException(
+                status_code=400,
+                detail="wallet private_key_file must be changed through config or environment",
+            )
         current = app.state.config
         wallet_update = current.wallet.model_dump()
-        for key in ("execute", "recipient", "private_key_file"):
+        for key in ("execute", "recipient"):
             if key in payload:
                 wallet_update[key] = payload[key]
         new_wallet = WalletConfig.model_validate(wallet_update)
@@ -700,26 +833,35 @@ def create_app(
         return wallet_payload()
 
     @app.post("/wallet/generate")
-    async def generate_wallet_key(payload: dict[str, Any]) -> dict[str, Any]:
+    async def generate_wallet_key(
+        payload: dict[str, Any],
+        _admin: None = Depends(_require_admin_token),
+    ) -> dict[str, Any]:
         return persist_wallet_key(
             _generate_private_key(),
             overwrite=bool(payload.get("overwrite")),
         )
 
     @app.post("/wallet/import")
-    async def import_wallet_key(payload: dict[str, Any]) -> dict[str, Any]:
+    async def import_wallet_key(
+        payload: dict[str, Any],
+        _admin: None = Depends(_require_admin_token),
+    ) -> dict[str, Any]:
         return persist_wallet_key(
             _validate_private_key(str(payload.get("private_key", ""))),
             overwrite=bool(payload.get("overwrite")),
         )
 
     @app.get("/config.yaml", response_class=PlainTextResponse)
-    async def get_config_yaml() -> str:
+    async def get_config_yaml(
+        _admin: None = Depends(_require_admin_token),
+    ) -> str:
         return render_config(app.state.config)
 
     @app.put("/config.yaml")
     async def put_config_yaml(
         body: str = Body(media_type="text/plain"),
+        _admin: None = Depends(_require_admin_token),
     ) -> dict[str, Any]:
         config_path_value = app.state.config_path
         if config_path_value is None:
@@ -731,11 +873,22 @@ def create_app(
             new_config = parse_config_text(body, config_path=config_path_value)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if _wallet_key_source_changed(app.state.config, new_config):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "wallet key source fields must be changed through local "
+                    "config or environment, not the admin API"
+                ),
+            )
         persist_config(new_config)
         return {"saved": True}
 
     @app.post("/evaluate/{pair_id}")
-    async def evaluate(pair_id: int) -> list[dict[str, Any]]:
+    async def evaluate(
+        pair_id: int,
+        _admin: None = Depends(_require_admin_token),
+    ) -> list[dict[str, Any]]:
         try:
             return await app.state.worker.evaluate_pair_once(pair_id)
         except Exception as exc:

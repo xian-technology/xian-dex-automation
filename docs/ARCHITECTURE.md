@@ -19,7 +19,9 @@ This is the only component that should run unattended.
 The FastAPI service exposes status, configured rules, recorded runs, wallet
 metadata, rule/config write endpoints, and a manual pair evaluation endpoint.
 It does not expose private key material and does not make hidden trading
-decisions.
+decisions. `GET /` and `GET /health` are public; every other API endpoint
+requires the bearer token from `XIAN_DEX_AUTOMATION_ADMIN_TOKEN`. Unsafe
+methods also reject cross-origin browser requests.
 
 ## Admin UI
 
@@ -37,7 +39,8 @@ is for operator setup and inspection:
 The admin UI does not connect to the user's browser wallet, does not return
 private key material through the API, and should stay loopback-bound unless an
 operator deliberately protects and exposes it. Generating, rotating, or
-importing a key disables execution so the new wallet starts in dry-run mode.
+importing a key writes only to the configured service key path and disables
+execution so the new wallet starts in dry-run mode.
 
 ## Browser Setup Direction
 

@@ -26,10 +26,11 @@ dedicated local key file under `.artifacts/dex-automation/wallet.key`. That key
 is a service wallet, not the user's browser wallet. Operators should fund it
 with a bounded amount and keep the generated file private.
 
-The local admin UI can generate, rotate, or import this service wallet key file.
-It never returns the private key after writing it, and key changes force
-`wallet.execute: false` so operators can inspect dry-run output before allowing
-submissions.
+The local admin UI can generate, rotate, or import the configured service
+wallet key file after it is unlocked with `XIAN_DEX_AUTOMATION_ADMIN_TOKEN`.
+It never returns the private key after writing it, cannot change the key-file
+path over HTTP, and key changes force `wallet.execute: false` so operators can
+inspect dry-run output before allowing submissions.
 
 ## Future Model: Strategy Contract
 

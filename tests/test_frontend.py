@@ -62,11 +62,13 @@ def test_frontend_has_stable_control_contract(tmp_path) -> None:
     assert duplicate_ids == {}
 
     required_test_ids = {
+        "admin-token",
+        "save-admin-token",
+        "clear-admin-token",
         "mode",
         "rule-count",
         "wallet-address",
         "wallet-execute",
-        "wallet-key-file",
         "import-private-key",
         "generate-wallet",
         "rotate-wallet",
@@ -95,3 +97,5 @@ def test_frontend_wires_wallet_and_rule_endpoints(tmp_path) -> None:
         "/evaluate/",
     ):
         assert endpoint in html
+    assert "authorization" in html
+    assert "sessionStorage" in html

@@ -3,11 +3,30 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sys
+from ipaddress import ip_address
 
 from .config import load_config
-from .service import create_app
+from .service import ADMIN_TOKEN_ENV, configured_admin_token, create_app
 from .storage import AutomationStore
 from .worker import AutomationWorker
+
+
+def is_loopback_host(host: str | None) -> bool:
+    value = (host or "").strip().strip("[]").lower()
+    if value == "localhost":
+        return True
+    try:
+        return ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_serve_host(host: str) -> None:
+    if not is_loopback_host(host) and configured_admin_token() is None:
+        raise ValueError(
+            f"non-loopback API binds require {ADMIN_TOKEN_ENV} to be set"
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,6 +82,16 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "serve":
         import uvicorn
 
+        try:
+            validate_serve_host(args.host)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if configured_admin_token() is None:
+            print(
+                f"warning: {ADMIN_TOKEN_ENV} is not set; only / and /health "
+                "will be usable until an admin token is configured",
+                file=sys.stderr,
+            )
         config = load_config(args.config)
         app = create_app(
             config,

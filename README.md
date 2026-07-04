@@ -35,6 +35,7 @@ Set up a local environment:
 cd xian-dex-automation
 uv sync --extra dev
 cp config.example.yaml config.yaml
+export XIAN_DEX_AUTOMATION_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 ```
 
 Validate the config:
@@ -48,6 +49,11 @@ Run the API (admin UI at `http://127.0.0.1:8787`):
 ```bash
 uv run xian-dex-automation serve --config config.yaml --host 127.0.0.1 --port 8787
 ```
+
+Enter `XIAN_DEX_AUTOMATION_ADMIN_TOKEN` in the admin UI to unlock rule,
+wallet, config, and evaluation endpoints. `GET /` and `GET /health` stay
+public for local page load and health checks; every other API endpoint requires
+`Authorization: Bearer <token>`.
 
 Run the worker:
 
@@ -72,9 +78,10 @@ export XIAN_DEX_AUTOMATION_PRIVATE_KEY=...
 ```
 
 Then set `wallet.execute: true` in `config.yaml` (or via the admin UI). The
-admin UI can also generate, rotate, or import a dedicated service wallet.
-Any key change forces `wallet.execute: false`, so a new or imported wallet
-always starts in dry-run mode.
+admin UI can also generate, rotate, or import the configured service wallet
+key file after it is unlocked with the admin token. It cannot change the
+key-file path over HTTP. Any key change forces `wallet.execute: false`, so a
+new or imported wallet always starts in dry-run mode.
 
 ### Stack-Managed Sidecar
 
@@ -83,6 +90,7 @@ optional sidecar:
 
 ```bash
 cd ../xian-stack
+export XIAN_DEX_AUTOMATION_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 python3 ./scripts/backend.py start     --no-bds-enabled --dex-automation
 python3 ./scripts/backend.py endpoints --no-bds-enabled --dex-automation
 ```
@@ -90,7 +98,8 @@ python3 ./scripts/backend.py endpoints --no-bds-enabled --dex-automation
 Default URL: `http://127.0.0.1:38280`. The stack-managed path creates a
 dedicated local key file at
 `xian-stack/.artifacts/dex-automation/wallet.key` and keeps the service in
-dry-run mode until execution is explicitly enabled.
+dry-run mode until execution is explicitly enabled. Enter the admin token in
+the UI to manage rules, wallet settings, config, and manual evaluations.
 
 ## Principles
 
@@ -106,7 +115,9 @@ dry-run mode until execution is explicitly enabled.
 - **Default to dry-run.** Execution is opt-in. Generated, rotated, or
   imported wallets always start with `wallet.execute: false`.
 - **Local-only by default.** API and admin UI bind to `127.0.0.1`. The UI
-  talks to the same local API and never returns private key material.
+  talks to the same local API, never returns private key material, and requires
+  an admin bearer token for non-health API access. Non-loopback binds are
+  refused unless `XIAN_DEX_AUTOMATION_ADMIN_TOKEN` is configured.
 - **Independent of the DEX repo.** This service is event-driven and lives
   outside `xian-dex`; the DEX repo owns contracts and frontend, this repo
   owns automation.
@@ -137,18 +148,19 @@ See [config.example.yaml](config.example.yaml) for the full shape.
 
 When the API is running:
 
-- `GET    /health`
-- `GET    /rules`
-- `PUT    /rules/{rule_id}`
-- `DELETE /rules/{rule_id}`
-- `GET    /runs`
-- `GET    /wallet`
-- `PATCH  /wallet`
-- `POST   /wallet/generate`
-- `POST   /wallet/import`
-- `GET    /config.yaml`
-- `PUT    /config.yaml`
-- `POST   /evaluate/{pair_id}`
+- `GET    /` — public admin UI shell
+- `GET    /health` — public health check
+- `GET    /rules` — requires `Authorization: Bearer <token>`
+- `PUT    /rules/{rule_id}` — requires `Authorization: Bearer <token>`
+- `DELETE /rules/{rule_id}` — requires `Authorization: Bearer <token>`
+- `GET    /runs` — requires `Authorization: Bearer <token>`
+- `GET    /wallet` — requires `Authorization: Bearer <token>`
+- `PATCH  /wallet` — requires `Authorization: Bearer <token>`
+- `POST   /wallet/generate` — requires `Authorization: Bearer <token>`
+- `POST   /wallet/import` — requires `Authorization: Bearer <token>`
+- `GET    /config.yaml` — requires `Authorization: Bearer <token>`
+- `PUT    /config.yaml` — requires `Authorization: Bearer <token>`
+- `POST   /evaluate/{pair_id}` — requires `Authorization: Bearer <token>`
 
 `POST /evaluate/{pair_id}` evaluates matching rules once. In dry-run mode
 it records what would have happened without submitting a transaction.
