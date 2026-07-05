@@ -50,6 +50,13 @@ Run the API (admin UI at `http://127.0.0.1:8787`):
 uv run xian-dex-automation serve --config config.yaml --host 127.0.0.1 --port 8787
 ```
 
+For IPv6 loopback-only access, bind to `::1` and open
+`http://[::1]:8787`:
+
+```bash
+uv run xian-dex-automation serve --config config.yaml --host ::1 --port 8787
+```
+
 Enter `XIAN_DEX_AUTOMATION_ADMIN_TOKEN` in the admin UI to unlock rule,
 wallet, config, and evaluation endpoints. `GET /` and `GET /health` stay
 public for local page load and health checks; every other API endpoint requires
@@ -114,10 +121,11 @@ the UI to manage rules, wallet settings, config, and manual evaluations.
   its own wallet. Fund it with a deliberately limited budget.
 - **Default to dry-run.** Execution is opt-in. Generated, rotated, or
   imported wallets always start with `wallet.execute: false`.
-- **Local-only by default.** API and admin UI bind to `127.0.0.1`. The UI
-  talks to the same local API, never returns private key material, and requires
-  an admin bearer token for non-health API access. Non-loopback binds are
-  refused unless `XIAN_DEX_AUTOMATION_ADMIN_TOKEN` is configured.
+- **Local-only by default.** API and admin UI bind to `127.0.0.1` by default
+  and can bind to IPv6 loopback with `--host ::1`. The UI talks to the same
+  local API, never returns private key material, and requires an admin bearer
+  token for non-health API access. Non-loopback binds are refused unless
+  `XIAN_DEX_AUTOMATION_ADMIN_TOKEN` is configured.
 - **Independent of the DEX repo.** This service is event-driven and lives
   outside `xian-dex`; the DEX repo owns contracts and frontend, this repo
   owns automation.
