@@ -20,7 +20,10 @@ flowchart LR
   Worker --> Rules["Rule evaluator"]
   Rules --> DryRun["Dry-run run log"]
   Rules -->|when enabled| Wallet["Automation wallet"]
-  Wallet --> DEX["con_dex trade"]
+  Wallet --> Custody{"Custody mode"}
+  Custody -->|direct| DEX["con_dex trade"]
+  Custody -->|bounded| Vault["strategy vault"]
+  Vault --> DEX
   API["Admin API"] --> Rules
   UI["Admin UI"] --> API
   Storage["SQLite state"] --> Worker
@@ -90,6 +93,13 @@ key file after it is unlocked with the admin token. It cannot change the
 key-file path over HTTP. Any key change forces `wallet.execute: false`, so a
 new or imported wallet always starts in dry-run mode.
 
+For on-chain custody, set `custody.mode: strategy_vault` and copy the exact
+deployed pair, direction, keeper, trade/budget, slippage, cooldown, and deadline
+limits into `custody.strategy_vault`. Rules outside that envelope are rejected.
+The service calls the vault's constrained `execute_swap` entrypoint and cannot
+choose an output recipient. See [docs/WALLET_MODEL.md](docs/WALLET_MODEL.md) for
+deployment and localnet exercise commands.
+
 ### Stack-Managed Sidecar
 
 When this repo lives next to `xian-stack`, the backend runs it as an
@@ -117,8 +127,10 @@ the UI to manage rules, wallet settings, config, and manual evaluations.
   interactive and require user presence per transaction. Unattended
   automation uses a dedicated automation wallet. A stricter strategy / vault
   model can constrain what an off-chain keeper can trigger.
-- **Bounded by wallet balance.** The service can only trade funds held by
-  its own wallet. Fund it with a deliberately limited budget.
+- **Explicit custody boundary.** Direct mode is bounded by the service-wallet
+  balance. Strategy-vault mode is bounded on-chain by pair/direction/action,
+  per-trade and cumulative spend, slippage, cooldown, deadline, keeper, and
+  withdrawal controls.
 - **Default to dry-run.** Execution is opt-in. Generated, rotated, or
   imported wallets always start with `wallet.execute: false`.
 - **Local-only by default.** API and admin UI bind to `127.0.0.1` by default
@@ -134,11 +146,13 @@ the UI to manage rules, wallet settings, config, and manual evaluations.
 
 1. **Dedicated automation wallet.** Generate a wallet,
    fund it with a limited budget, run this service with that private key.
-2. **On-chain strategy / vault.** A user connects a browser wallet, deposits a
-   bounded budget into a strategy contract, and the off-chain keeper can only
-   trigger actions allowed by the contract.
+2. **On-chain strategy vault.** A user-owned deployed contract holds a bounded
+   budget and the off-chain keeper can only trigger its fixed exact-input swap
+   under hard on-chain limits.
 
-The current implementation uses model 1 and defaults to dry-run.
+Both models are implemented and both default to dry-run. The local admin UI
+exposes the configured custody envelope; contract deployment and owner actions
+are intentionally separate human-approved setup steps.
 
 ## Rule Shape
 
@@ -163,6 +177,7 @@ When the API is running:
 - `DELETE /rules/{rule_id}` — requires `Authorization: Bearer <token>`
 - `GET    /runs` — requires `Authorization: Bearer <token>`
 - `GET    /wallet` — requires `Authorization: Bearer <token>`
+- `GET    /custody` — requires `Authorization: Bearer <token>`
 - `PATCH  /wallet` — requires `Authorization: Bearer <token>`
 - `POST   /wallet/generate` — requires `Authorization: Bearer <token>`
 - `POST   /wallet/import` — requires `Authorization: Bearer <token>`
@@ -186,6 +201,8 @@ it records what would have happened without submitting a transaction.
     wallet metadata).
   - `config.py` — typed config schema.
 - `web/` — built-in admin UI assets.
+- `contracts/` — constrained on-chain strategy-vault source and deployment notes.
+- `scripts/` — dry-run-by-default localnet vault bootstrap/exercise helper.
 - `state/` — local SQLite state.
 - `tests/` — unit, frontend, and opt-in live-node coverage.
 - `docs/` — architecture and wallet-model notes.
@@ -205,6 +222,12 @@ contracts and a liquid pair:
 XIAN_DEX_AUTOMATION_LIVE_RPC_URL=http://127.0.0.1:26657 \
 XIAN_DEX_AUTOMATION_LIVE_PAIR_ID=1 \
 uv run --extra dev pytest tests/test_live_node.py -q
+```
+
+Full localnet strategy-vault deployment and a keeper-triggered swap:
+
+```bash
+uv run --extra dev python scripts/bootstrap_strategy_vault.py --execute --execute-swap
 ```
 
 GitHub Actions runs lint, unit / frontend tests, and compile checks on

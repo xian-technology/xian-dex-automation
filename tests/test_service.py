@@ -60,6 +60,85 @@ def test_index_and_config_yaml(tmp_path) -> None:
     assert yaml_response.status_code == 200
     assert "rules:" in yaml_response.text
 
+    custody_response = client.get("/custody", headers=admin_headers())
+    assert custody_response.status_code == 200
+    assert custody_response.json() == {
+        "mode": "direct_wallet",
+        "strategy_vault": None,
+    }
+    assert client.get("/wallet", headers=admin_headers()).json()[
+        "keeper_matches_config"
+    ] is None
+
+
+def test_strategy_vault_api_rejects_rule_outside_custody_envelope(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        f"""
+wallet:
+  execute: false
+custody:
+  mode: strategy_vault
+  strategy_vault:
+    contract: con_my_strategy
+    keeper_address: {"a" * 64}
+    pair_id: 1
+    src: currency
+    token_out: con_token
+    max_trade_size: "5"
+    total_spend_cap: "100"
+    max_slippage_bps: 100
+    cooldown_seconds: 300
+    max_deadline_seconds: 300
+database_path: automation.sqlite3
+rules: []
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    client = TestClient(
+        create_app(
+            load_config(config_path),
+            config_path=config_path,
+            admin_token=ADMIN_TOKEN,
+        )
+    )
+    rule = {
+        "id": "outside-vault",
+        "trigger": {
+            "pair_id": 2,
+            "threshold_bps": 100,
+            "cooldown_seconds": 300,
+        },
+        "action": {
+            "src": "currency",
+            "amount_in": "1",
+            "max_slippage_bps": 100,
+            "deadline_seconds": 300,
+        },
+    }
+
+    response = client.put(
+        "/rules/outside-vault",
+        json=rule,
+        headers=admin_headers(),
+    )
+
+    assert response.status_code == 400
+    assert "strategy vault scope" in response.json()["detail"]
+    assert load_config(config_path).rules == []
+
+    enable_response = client.patch(
+        "/wallet",
+        json={"execute": True},
+        headers=admin_headers(),
+    )
+    assert enable_response.status_code == 400
+    assert "matching custody.strategy_vault.keeper_address" in enable_response.json()[
+        "detail"
+    ]
+    assert load_config(config_path).wallet.execute is False
+
 
 def test_admin_api_requires_bearer_token(tmp_path) -> None:
     client, _config_path = make_client(tmp_path)

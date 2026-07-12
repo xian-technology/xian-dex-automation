@@ -227,7 +227,7 @@ def _index_html() -> str:
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .status {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
     }
     .metric {
@@ -278,6 +278,7 @@ def _index_html() -> str:
           <div class="metric"><span>Mode</span><strong id="mode" data-testid="mode">...</strong></div>
           <div class="metric"><span>Rules</span><strong id="ruleCount" data-testid="rule-count">...</strong></div>
           <div class="metric"><span>Wallet</span><strong id="walletAddress" data-testid="wallet-address">...</strong></div>
+          <div class="metric"><span>Custody</span><strong id="custodyMode" data-testid="custody-mode">...</strong></div>
         </div>
       </section>
       <section>
@@ -313,6 +314,7 @@ def _index_html() -> str:
           <button id="importWallet" data-testid="import-wallet" class="secondary">Import Key</button>
           <span id="walletSource" class="muted mono"></span>
         </div>
+        <p id="custodyDetails" data-testid="custody-details" class="muted small mono"></p>
       </section>
       <section>
         <h2>Rule</h2>
@@ -451,9 +453,11 @@ def _index_html() -> str:
       $("mode").textContent = health.execute_enabled ? "execute" : "dry-run";
       $("mode").className = health.execute_enabled ? "dangerText" : "ok";
       $("ruleCount").textContent = health.rules;
+      $("custodyMode").textContent = health.custody_mode;
       if (!adminToken()) {
         $("walletAddress").textContent = "locked";
         $("walletSource").textContent = "";
+        $("custodyDetails").textContent = "";
         $("rulesTable").innerHTML = `<tr><td colspan="4" class="empty">Enter the admin token to manage rules</td></tr>`;
         $("runsTable").innerHTML = `<tr><td colspan="4" class="empty">Enter the admin token to inspect runs</td></tr>`;
         $("yamlConfig").value = "";
@@ -461,8 +465,9 @@ def _index_html() -> str:
         message("Enter the admin token to unlock the admin API.", "muted");
         return;
       }
-      const [wallet, rules, runs, yaml] = await Promise.all([
+      const [wallet, custody, rules, runs, yaml] = await Promise.all([
         api("/wallet"),
+        api("/custody"),
         api("/rules"),
         api("/runs"),
         api("/config.yaml")
@@ -470,7 +475,17 @@ def _index_html() -> str:
       $("walletAddress").textContent = wallet.address || "not configured";
       $("walletExecute").value = String(wallet.execute_enabled);
       $("walletRecipient").value = wallet.recipient || "";
+      $("walletRecipient").disabled = custody.mode === "strategy_vault";
       $("walletSource").textContent = wallet.private_key_source || "no key";
+      $("custodyDetails").textContent = custody.strategy_vault
+        ? `${custody.strategy_vault.contract}: pair ${custody.strategy_vault.pair_id}, ${custody.strategy_vault.src} -> ${custody.strategy_vault.token_out}, max ${custody.strategy_vault.max_trade_size}/trade, ${custody.strategy_vault.total_spend_cap} total`
+        : "Direct wallet balance is the custody boundary";
+      if (wallet.keeper_matches_config === false) {
+        $("custodyDetails").textContent += " — configured wallet does not match vault keeper";
+        $("custodyDetails").className = "dangerText small mono";
+      } else {
+        $("custodyDetails").className = "muted small mono";
+      }
       $("yamlConfig").value = yaml;
       $("rulesTable").innerHTML = rules.length ? rules.map((rule) => `
         <tr>
@@ -664,6 +679,20 @@ def create_app(
                 status_code=409,
                 detail="config writes require a config path",
             )
+        strategy = new_config.custody.strategy_vault
+        if new_config.wallet.execute and strategy is not None:
+            try:
+                address = _wallet_address(resolve_private_key(new_config))
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if address != strategy.keeper_address:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "execution requires a service wallet matching "
+                        "custody.strategy_vault.keeper_address"
+                    ),
+                )
         save_config(new_config, app.state.config_path)
         apply_config(new_config)
 
@@ -679,6 +708,17 @@ def create_app(
             new_config,
             config_path=app.state.config_path,
         )
+
+    def validated_update(
+        current: AutomationConfig,
+        **updates: Any,
+    ) -> AutomationConfig:
+        candidate = current.model_copy(update=updates, deep=True)
+        try:
+            validated = AutomationConfig.model_validate(candidate.model_dump())
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return normalized_for_persist(validated)
 
     def wallet_key_path(current: AutomationConfig) -> Path:
         if os.environ.get(current.wallet.private_key_env):
@@ -707,6 +747,8 @@ def create_app(
         private_key_source = (
             resolve_private_key_source(current) if private_key else None
         )
+        strategy = current.custody.strategy_vault
+        address = _wallet_address(private_key)
         return {
             "execute_enabled": current.wallet.execute,
             "private_key_env": current.wallet.private_key_env,
@@ -717,8 +759,14 @@ def create_app(
             ),
             "private_key_file_env": current.wallet.private_key_file_env,
             "private_key_source": private_key_source,
-            "address": _wallet_address(private_key),
+            "address": address,
             "recipient": current.wallet.recipient,
+            "custody_mode": current.custody.mode,
+            "keeper_matches_config": (
+                None
+                if strategy is None or address is None
+                else address == strategy.keeper_address
+            ),
         }
 
     def persist_wallet_key(
@@ -738,9 +786,7 @@ def create_app(
             wallet_update["private_key_file"] = path
         wallet_update["execute"] = False
         new_wallet = WalletConfig.model_validate(wallet_update)
-        new_config = normalized_for_persist(
-            current.model_copy(update={"wallet": new_wallet}, deep=True)
-        )
+        new_config = validated_update(current, wallet=new_wallet)
         persist_config(new_config)
         return wallet_payload()
 
@@ -754,8 +800,15 @@ def create_app(
         return {
             "status": "ok",
             "execute_enabled": current.wallet.execute,
+            "custody_mode": current.custody.mode,
             "rules": len(current.rules),
         }
+
+    @app.get("/custody")
+    async def custody(
+        _admin: None = Depends(_require_admin_token),
+    ) -> dict[str, Any]:
+        return app.state.config.custody.model_dump(mode="json")
 
     @app.get("/rules")
     async def rules(
@@ -777,9 +830,9 @@ def create_app(
         current = app.state.config
         rules_by_id = {item.id: item for item in current.rules}
         rules_by_id[rule_id] = rule
-        new_config = current.model_copy(
-            update={"rules": list(rules_by_id.values())},
-            deep=True,
+        new_config = validated_update(
+            current,
+            rules=list(rules_by_id.values()),
         )
         persist_config(new_config)
         return rule.model_dump(mode="json")
@@ -793,7 +846,7 @@ def create_app(
         rules = [rule for rule in current.rules if rule.id != rule_id]
         if len(rules) == len(current.rules):
             raise HTTPException(status_code=404, detail="rule not found")
-        new_config = current.model_copy(update={"rules": rules}, deep=True)
+        new_config = validated_update(current, rules=rules)
         persist_config(new_config)
         return {"deleted": rule_id}
 
@@ -826,9 +879,7 @@ def create_app(
             if key in payload:
                 wallet_update[key] = payload[key]
         new_wallet = WalletConfig.model_validate(wallet_update)
-        new_config = normalized_for_persist(
-            current.model_copy(update={"wallet": new_wallet}, deep=True)
-        )
+        new_config = validated_update(current, wallet=new_wallet)
         persist_config(new_config)
         return wallet_payload()
 
