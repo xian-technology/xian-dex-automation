@@ -4,6 +4,9 @@ import decimal
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from xian_dex_automation.config import (
     AutomationConfig,
     load_config,
@@ -53,3 +56,84 @@ def test_install_contracting_decimal_context_for_async_tasks() -> None:
         assert str(ContractingDecimal("9980.099711")) == "9980.099711"
     finally:
         decimal.setcontext(previous)
+
+
+def test_strategy_vault_config_accepts_rules_inside_on_chain_envelope() -> None:
+    config = AutomationConfig.model_validate(
+        {
+            "custody": {
+                "mode": "strategy_vault",
+                "strategy_vault": {
+                    "contract": "con_my_strategy",
+                    "keeper_address": "a" * 64,
+                    "pair_id": 1,
+                    "src": "currency",
+                    "token_out": "con_token",
+                    "max_trade_size": "5",
+                    "total_spend_cap": "100",
+                    "max_slippage_bps": 100,
+                    "cooldown_seconds": 300,
+                    "max_deadline_seconds": 300,
+                },
+            },
+            "rules": [
+                {
+                    "id": "bounded",
+                    "trigger": {
+                        "pair_id": 1,
+                        "threshold_bps": 100,
+                        "cooldown_seconds": 300,
+                    },
+                    "action": {
+                        "src": "currency",
+                        "amount_in": "5",
+                        "max_slippage_bps": 100,
+                        "deadline_seconds": 300,
+                    },
+                }
+            ],
+        }
+    )
+
+    assert config.custody.strategy_vault is not None
+    assert config.custody.strategy_vault.total_spend_cap == Decimal("100")
+
+
+def test_strategy_vault_config_rejects_rules_outside_on_chain_envelope() -> None:
+    payload = {
+        "custody": {
+            "mode": "strategy_vault",
+            "strategy_vault": {
+                "contract": "con_my_strategy",
+                "keeper_address": "a" * 64,
+                "pair_id": 1,
+                "src": "currency",
+                "token_out": "con_token",
+                "max_trade_size": "5",
+                "total_spend_cap": "100",
+                "max_slippage_bps": 100,
+                "cooldown_seconds": 300,
+                "max_deadline_seconds": 300,
+            },
+        },
+        "rules": [
+            {
+                "id": "unbounded",
+                "trigger": {
+                    "pair_id": 2,
+                    "threshold_bps": 100,
+                    "cooldown_seconds": 299,
+                },
+                "action": {
+                    "src": "con_other",
+                    "amount_in": "6",
+                    "max_slippage_bps": 101,
+                    "deadline_seconds": 301,
+                    "recipient": "attacker",
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        AutomationConfig.model_validate(payload)

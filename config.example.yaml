@@ -15,6 +15,29 @@ wallet:
   execute: false
   recipient: null
 
+# direct_wallet submits directly to con_dex. For on-chain custody, switch to
+# strategy_vault and configure the exact immutable/tightening-only envelope
+# used to deploy contracts/con_dex_strategy_vault.py. Rules are rejected when
+# they exceed this local copy of the on-chain limits.
+custody:
+  mode: "direct_wallet"
+  strategy_vault: null
+
+# Strategy-vault example:
+# custody:
+#   mode: "strategy_vault"
+#   strategy_vault:
+#     contract: "con_my_dex_strategy"
+#     keeper_address: "<64-character automation wallet public key>"
+#     pair_id: 1
+#     src: "currency"
+#     token_out: "con_token"
+#     max_trade_size: "5"
+#     total_spend_cap: "100"
+#     max_slippage_bps: 100
+#     cooldown_seconds: 300
+#     max_deadline_seconds: 300
+
 database_path: "state/xian-dex-automation.sqlite3"
 
 rules:

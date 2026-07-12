@@ -83,6 +83,12 @@ class AutomationWorker:
             "current_price": _decimal_details(decision.current_price),
             "change_bps": _decimal_details(decision.change_bps),
             "execute_enabled": self.config.wallet.execute,
+            "custody_mode": self.config.custody.mode,
+            "strategy_contract": (
+                self.config.custody.strategy_vault.contract
+                if self.config.custody.strategy_vault is not None
+                else None
+            ),
         }
 
         if (

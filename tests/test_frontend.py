@@ -68,6 +68,8 @@ def test_frontend_has_stable_control_contract(tmp_path) -> None:
         "mode",
         "rule-count",
         "wallet-address",
+        "custody-mode",
+        "custody-details",
         "wallet-execute",
         "import-private-key",
         "generate-wallet",
@@ -89,6 +91,7 @@ def test_frontend_wires_wallet_and_rule_endpoints(tmp_path) -> None:
     for endpoint in (
         "/health",
         "/wallet",
+        "/custody",
         "/wallet/generate",
         "/wallet/import",
         "/rules",

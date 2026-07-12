@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import decimal as decimal_module
+import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -10,6 +11,9 @@ from typing import Any
 from .config import AutomationConfig, SwapExactInActionConfig
 
 BPS = Decimal("10000")
+DEADLINE_SAFETY_MARGIN_SECONDS = 5
+
+logger = logging.getLogger(__name__)
 
 
 class DexAutomationError(RuntimeError):
@@ -79,6 +83,13 @@ class PairSnapshot:
         )
 
 
+@dataclass(frozen=True)
+class ContractCallPlan:
+    contract: str
+    function: str
+    kwargs: dict[str, Any]
+
+
 def decimal_value(value: Any) -> Decimal:
     if isinstance(value, Decimal):
         return value
@@ -96,8 +107,33 @@ def decimal_value(value: Any) -> Decimal:
         ) from exc
 
 
-def xian_deadline(seconds_from_now: int) -> dict[str, list[int]]:
-    future = datetime.now(UTC) + timedelta(seconds=seconds_from_now)
+def _parse_node_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def xian_deadline(
+    seconds_from_now: int,
+    *,
+    base_time: datetime | None = None,
+) -> dict[str, list[int]]:
+    if seconds_from_now <= 0:
+        raise DexAutomationError("deadline seconds must be positive")
+    margin = min(
+        DEADLINE_SAFETY_MARGIN_SECONDS,
+        max(0, seconds_from_now - 1),
+    )
+    effective_seconds = seconds_from_now - margin
+    future = (base_time or datetime.now(UTC)) + timedelta(
+        seconds=effective_seconds
+    )
     return {
         "__time__": [
             future.year,
@@ -137,6 +173,17 @@ class DexClient:
 
         wallet = Wallet(private_key) if private_key else Wallet()
         self.wallet_address = wallet.public_key if private_key else None
+        strategy = self.config.custody.strategy_vault
+        if (
+            strategy is not None
+            and private_key
+            and self.config.wallet.execute
+            and self.wallet_address != strategy.keeper_address
+        ):
+            raise DexAutomationError(
+                "configured automation wallet does not match "
+                "custody.strategy_vault.keeper_address"
+            )
         client_config = XianClientConfig(
             retry=RetryPolicy(max_attempts=3, initial_delay_seconds=0.25),
             watcher=WatcherConfig(
@@ -212,13 +259,72 @@ class DexClient:
             reserve_in + amount_in_with_fee
         )
 
+    async def transaction_deadline(
+        self,
+        seconds_from_now: int,
+    ) -> dict[str, list[int]]:
+        base_time: datetime | None = None
+        try:
+            status = await self.client.get_node_status()
+            base_time = _parse_node_time(
+                getattr(status, "latest_block_time_iso", None)
+            )
+        except Exception as exc:
+            logger.debug(
+                "unable to read latest block time; using wall-clock deadline base: %s",
+                exc,
+            )
+        return xian_deadline(seconds_from_now, base_time=base_time)
+
     async def swap_exact_in(
         self,
         snapshot: PairSnapshot,
         action: SwapExactInActionConfig,
         *,
         amount_out_min: Decimal,
+        chi: int | None = None,
     ) -> Any:
+        plan = await self.build_swap_exact_in_call(
+            snapshot,
+            action,
+            amount_out_min=amount_out_min,
+        )
+        return await self.submit_call_plan(plan, chi=chi)
+
+    async def build_swap_exact_in_call(
+        self,
+        snapshot: PairSnapshot,
+        action: SwapExactInActionConfig,
+        *,
+        amount_out_min: Decimal,
+    ) -> ContractCallPlan:
+        strategy = self.config.custody.strategy_vault
+        if self.config.custody.mode == "strategy_vault":
+            if strategy is None:
+                raise DexAutomationError("strategy vault is not configured")
+            _reserve_in, _reserve_out, token_out = snapshot.reserves_for_src(
+                action.src
+            )
+            if snapshot.pair_id != strategy.pair_id:
+                raise DexAutomationError(
+                    "swap pair does not match the configured strategy vault"
+                )
+            if action.src != strategy.src or token_out != strategy.token_out:
+                raise DexAutomationError(
+                    "swap direction does not match the configured strategy vault"
+                )
+            return ContractCallPlan(
+                contract=strategy.contract,
+                function="execute_swap",
+                kwargs={
+                    "amount_in": action.amount_in,
+                    "amount_out_min": amount_out_min,
+                    "deadline": await self.transaction_deadline(
+                        action.deadline_seconds
+                    ),
+                },
+            )
+
         recipient = (
             action.recipient
             or self.config.wallet.recipient
@@ -227,13 +333,30 @@ class DexClient:
         if recipient is None:
             raise DexAutomationError("swap recipient is not configured")
 
-        return await self.client.contract(self.config.dex.router_contract).send(
-            "swapExactTokenForToken",
-            amountIn=action.amount_in,
-            amountOutMin=amount_out_min,
-            pair=snapshot.pair_id,
-            src=action.src,
-            to=recipient,
-            deadline=xian_deadline(action.deadline_seconds),
+        return ContractCallPlan(
+            contract=self.config.dex.router_contract,
+            function="swapExactTokenForToken",
+            kwargs={
+                "amountIn": action.amount_in,
+                "amountOutMin": amount_out_min,
+                "pair": snapshot.pair_id,
+                "src": action.src,
+                "to": recipient,
+                "deadline": await self.transaction_deadline(
+                    action.deadline_seconds
+                ),
+            },
+        )
+
+    async def submit_call_plan(
+        self,
+        plan: ContractCallPlan,
+        *,
+        chi: int | None = None,
+    ) -> Any:
+        return await self.client.contract(plan.contract).send(
+            plan.function,
+            **plan.kwargs,
+            chi=chi,
             wait_for_tx=True,
         )

@@ -11,6 +11,8 @@ The executor is a Python worker built on `xian-py`. It:
 - evaluates local, deterministic rules
 - records decisions in SQLite
 - optionally signs and submits transactions with a configured automation wallet
+- dispatches either directly to `con_dex` or to an on-chain strategy vault;
+  rule evaluation remains identical and deterministic in both modes
 
 This is the only component that should run unattended.
 
@@ -55,12 +57,18 @@ for human-approved setup actions:
 The browser wallet should not be treated as the unattended executor. It cannot
 reliably sign future event-triggered trades after the user leaves the page.
 
-## Custody Direction
+## Custody Models
 
 The current implementation is a local automation wallet. It is practical for
 operators and power users because risk is bounded by the funds sent to that
 wallet.
 
-For a broader consumer product, add an on-chain strategy/vault contract. The
-user would deposit a bounded budget and hard constraints on-chain, while this
-Python keeper only triggers allowed executions.
+For less-trusted automation, `contracts/con_dex_strategy_vault.py` fixes one
+pair, direction, action, keeper, and cumulative budget per deployment. The
+contract enforces trade size, slippage, cooldown, deadline, authority, and
+withdrawal controls. The Python worker only quotes and triggers the constrained
+entrypoint; it cannot redirect vault output or loosen limits.
+
+`custody.strategy_vault` mirrors the intended on-chain envelope so invalid
+rules fail during config/API validation. This duplication is an operator
+guardrail, not the custody boundary: the contract remains authoritative.
