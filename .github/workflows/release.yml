@@ -40,7 +40,7 @@ jobs:
 
       - name: Validate service
         run: |
-          uv sync --no-sources --frozen --extra dev
+          uv sync --no-sources --extra dev
           uv run --no-sources --extra dev ruff check .
           uv run --no-sources --extra dev pytest
           uv run --no-sources --extra dev python -m compileall src tests
