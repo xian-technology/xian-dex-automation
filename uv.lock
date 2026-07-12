@@ -823,7 +823,7 @@ source = { directory = "../xian-contracting/packages/xian-compiler-core" }
 
 [[package]]
 name = "xian-tech-contracting"
-version = "1.1.0"
+version = "1.1.1"
 source = { editable = "../xian-contracting" }
 dependencies = [
     { name = "cachetools" },
