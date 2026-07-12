@@ -30,14 +30,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Sync dependencies
-        run: uv sync --extra dev
+      - name: Sync published dependencies
+        run: uv sync --no-sources --frozen --extra dev
 
       - name: Lint
-        run: uv run --extra dev ruff check .
+        run: uv run --no-sources --extra dev ruff check .
 
       - name: Test
-        run: uv run --extra dev pytest
+        run: uv run --no-sources --extra dev pytest
 
       - name: Compile
-        run: uv run --extra dev python -m compileall src tests
+        run: uv run --no-sources --extra dev python -m compileall src tests
