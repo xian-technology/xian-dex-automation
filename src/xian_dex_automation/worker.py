@@ -37,8 +37,7 @@ class AutomationWorker:
                 cursor,
             )
             async for event in event_client.watch(after_id=cursor):
-                pair_id = self._pair_id_from_event(event)
-                if pair_id is not None:
+                for pair_id in self._pair_ids_from_event(event):
                     await self.evaluate_pair(dex, pair_id)
                 if event.id is not None:
                     self.store.save_cursor(cursor_name, int(event.id))
@@ -230,6 +229,21 @@ class AutomationWorker:
         if value is None:
             return None
         return int(value)
+
+    def _pair_ids_from_event(self, event: Any) -> list[int]:
+        pair_id = self._pair_id_from_event(event)
+        if pair_id is not None:
+            return [pair_id]
+
+        # Current con_pairs Sync events contain only reserve values. Evaluate
+        # each configured pair so those events still drive deterministic rules.
+        return sorted(
+            {
+                rule.trigger.pair_id
+                for rule in self.config.rules
+                if rule.enabled
+            }
+        )
 
 
 async def sleep_forever() -> None:

@@ -155,3 +155,28 @@ def test_worker_records_submission_failures(tmp_path) -> None:
     assert runs[0]["status"] == "failed"
     assert runs[0]["reason"] == "submission_failed"
     assert runs[0]["details"]["error"] == "swap failed"
+
+
+def test_worker_uses_pair_id_from_sync_event(tmp_path) -> None:
+    worker, _, _ = make_worker(tmp_path, execute=False)
+
+    pair_ids = worker._pair_ids_from_event(SimpleNamespace(data={"pair": 7}))
+
+    assert pair_ids == [7]
+
+
+def test_worker_falls_back_to_configured_pairs_when_sync_event_omits_pair(
+    tmp_path,
+) -> None:
+    worker, _, rule = make_worker(tmp_path, execute=False)
+    worker.config.rules = [
+        rule.model_copy(update={"trigger": rule.trigger.model_copy(update={"pair_id": 2})}),
+        rule.model_copy(update={"id": "r2"}),
+        rule.model_copy(update={"id": "r3", "enabled": False}),
+    ]
+
+    pair_ids = worker._pair_ids_from_event(
+        SimpleNamespace(data={"reserve0": "100", "reserve1": "102"})
+    )
+
+    assert pair_ids == [1, 2]
