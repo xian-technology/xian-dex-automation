@@ -888,7 +888,7 @@ dev = [
 
 [[package]]
 name = "xian-tech-runtime-types"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "../xian-contracting/packages/xian-runtime-types" }
 
 [[package]]
