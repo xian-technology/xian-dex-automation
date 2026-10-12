@@ -43,9 +43,7 @@ def _resolve_private_key(
         with open(key_path, encoding="utf-8") as key_file_obj:
             value = key_file_obj.read().strip()
     except OSError as exc:
-        raise DexAutomationError(
-            f"unable to read automation wallet key file: {key_path}"
-        ) from exc
+        raise DexAutomationError(f"unable to read automation wallet key file: {key_path}") from exc
     return value or None, key_path
 
 
@@ -56,7 +54,22 @@ def resolve_private_key(config: AutomationConfig) -> str | None:
 
 def resolve_private_key_source(config: AutomationConfig) -> str | None:
     _value, source = _resolve_private_key(config)
-    return source
+    return str(config.wallet.active_backup_file) if config.wallet.active_backup_file else source
+
+
+def resolve_wallet(config: AutomationConfig):
+    from xian_py.signers import load_signing_wallet
+
+    private_key = resolve_private_key(config)
+    backup = config.wallet.active_backup_file
+    if not private_key and not backup:
+        return None
+    return load_signing_wallet(
+        private_key=private_key,
+        active_backup_file=backup,
+        backup_password=os.environ.get(config.wallet.backup_password_env) if backup else None,
+        chain_id=config.network.chain_id,
+    )
 
 
 @dataclass(frozen=True)
@@ -78,9 +91,7 @@ class PairSnapshot:
             return self.reserve0, self.reserve1, self.token1
         if src == self.token1:
             return self.reserve1, self.reserve0, self.token0
-        raise DexAutomationError(
-            f"source token {src!r} is not in pair {self.pair_id}"
-        )
+        raise DexAutomationError(f"source token {src!r} is not in pair {self.pair_id}")
 
 
 @dataclass(frozen=True)
@@ -102,9 +113,7 @@ def decimal_value(value: Any) -> Decimal:
     try:
         return Decimal(str(value))
     except Exception as exc:
-        raise DexAutomationError(
-            f"expected numeric value, got {value!r}"
-        ) from exc
+        raise DexAutomationError(f"expected numeric value, got {value!r}") from exc
 
 
 def _parse_node_time(value: str | None) -> datetime | None:
@@ -131,9 +140,7 @@ def xian_deadline(
         max(0, seconds_from_now - 1),
     )
     effective_seconds = seconds_from_now - margin
-    future = (base_time or datetime.now(UTC)) + timedelta(
-        seconds=effective_seconds
-    )
+    future = (base_time or datetime.now(UTC)) + timedelta(seconds=effective_seconds)
     return {
         "__time__": [
             future.year,
@@ -164,33 +171,30 @@ class DexClient:
         )
         from xian_py.wallet import Wallet
 
-        private_key = resolve_private_key(self.config)
-        if self.config.wallet.execute and not private_key:
+        wallet = resolve_wallet(self.config)
+        has_signer = wallet is not None
+        if self.config.wallet.execute and not has_signer:
             raise DexAutomationError(
-                "wallet.execute is true but "
-                f"{self.config.wallet.private_key_env} is not set"
+                f"wallet.execute is true but {self.config.wallet.private_key_env} is not set"
             )
-
-        wallet = Wallet(private_key) if private_key else Wallet()
-        self.wallet_address = wallet.public_key if private_key else None
+        if wallet is None:
+            wallet = Wallet()
+        self.wallet_address = wallet.public_key if has_signer else None
         strategy = self.config.custody.strategy_vault
         if (
             strategy is not None
-            and private_key
+            and has_signer
             and self.config.wallet.execute
             and self.wallet_address != strategy.keeper_address
         ):
             raise DexAutomationError(
-                "configured automation wallet does not match "
-                "custody.strategy_vault.keeper_address"
+                "configured automation wallet does not match custody.strategy_vault.keeper_address"
             )
         client_config = XianClientConfig(
             retry=RetryPolicy(max_attempts=3, initial_delay_seconds=0.25),
             watcher=WatcherConfig(
                 mode=self.config.network.watcher_mode,
-                poll_interval_seconds=(
-                    self.config.network.poll_interval_seconds
-                ),
+                poll_interval_seconds=(self.config.network.poll_interval_seconds),
                 batch_limit=100,
             ),
         )
@@ -203,9 +207,7 @@ class DexClient:
         await self._client.__aenter__()
         return self
 
-    async def __aexit__(
-        self, exc_type: object, exc: object, tb: object
-    ) -> None:
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
         if self._client is not None:
             await self._client.__aexit__(exc_type, exc, tb)
         self._client = None
@@ -220,12 +222,8 @@ class DexClient:
         pairs = self.config.dex.pairs_contract
         token0 = await self.client.get_state(pairs, "pairs", pair_id, "token0")
         token1 = await self.client.get_state(pairs, "pairs", pair_id, "token1")
-        reserve0 = await self.client.get_state(
-            pairs, "pairs", pair_id, "reserve0"
-        )
-        reserve1 = await self.client.get_state(
-            pairs, "pairs", pair_id, "reserve1"
-        )
+        reserve0 = await self.client.get_state(pairs, "pairs", pair_id, "reserve0")
+        reserve1 = await self.client.get_state(pairs, "pairs", pair_id, "reserve1")
         if not token0 or not token1:
             raise DexAutomationError(f"pair {pair_id} does not exist")
         return PairSnapshot(
@@ -238,9 +236,9 @@ class DexClient:
 
     async def trade_fee_bps(self) -> int:
         account = self.wallet_address
-        value = await self.client.contract(
-            self.config.dex.router_contract
-        ).call("getTradeFeeBps", account=account)
+        value = await self.client.contract(self.config.dex.router_contract).call(
+            "getTradeFeeBps", account=account
+        )
         return int(value)
 
     async def quote_exact_in(
@@ -255,9 +253,7 @@ class DexClient:
         if reserve_in <= 0 or reserve_out <= 0:
             raise DexAutomationError("pair has insufficient liquidity")
         amount_in_with_fee = amount_in * ((BPS - fee_bps) / BPS)
-        return (amount_in_with_fee * reserve_out) / (
-            reserve_in + amount_in_with_fee
-        )
+        return (amount_in_with_fee * reserve_out) / (reserve_in + amount_in_with_fee)
 
     async def transaction_deadline(
         self,
@@ -266,9 +262,7 @@ class DexClient:
         base_time: datetime | None = None
         try:
             status = await self.client.get_node_status()
-            base_time = _parse_node_time(
-                getattr(status, "latest_block_time_iso", None)
-            )
+            base_time = _parse_node_time(getattr(status, "latest_block_time_iso", None))
         except Exception as exc:
             logger.debug(
                 "unable to read latest block time; using wall-clock deadline base: %s",
@@ -302,13 +296,9 @@ class DexClient:
         if self.config.custody.mode == "strategy_vault":
             if strategy is None:
                 raise DexAutomationError("strategy vault is not configured")
-            _reserve_in, _reserve_out, token_out = snapshot.reserves_for_src(
-                action.src
-            )
+            _reserve_in, _reserve_out, token_out = snapshot.reserves_for_src(action.src)
             if snapshot.pair_id != strategy.pair_id:
-                raise DexAutomationError(
-                    "swap pair does not match the configured strategy vault"
-                )
+                raise DexAutomationError("swap pair does not match the configured strategy vault")
             if action.src != strategy.src or token_out != strategy.token_out:
                 raise DexAutomationError(
                     "swap direction does not match the configured strategy vault"
@@ -319,17 +309,11 @@ class DexClient:
                 kwargs={
                     "amount_in": action.amount_in,
                     "amount_out_min": amount_out_min,
-                    "deadline": await self.transaction_deadline(
-                        action.deadline_seconds
-                    ),
+                    "deadline": await self.transaction_deadline(action.deadline_seconds),
                 },
             )
 
-        recipient = (
-            action.recipient
-            or self.config.wallet.recipient
-            or self.wallet_address
-        )
+        recipient = action.recipient or self.config.wallet.recipient or self.wallet_address
         if recipient is None:
             raise DexAutomationError("swap recipient is not configured")
 
@@ -342,9 +326,7 @@ class DexClient:
                 "pair": snapshot.pair_id,
                 "src": action.src,
                 "to": recipient,
-                "deadline": await self.transaction_deadline(
-                    action.deadline_seconds
-                ),
+                "deadline": await self.transaction_deadline(action.deadline_seconds),
             },
         )
 

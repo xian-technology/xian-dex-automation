@@ -60,5 +60,5 @@ only enable execution after the contract is funded and unpaused.
 - no fee-on-transfer or multi-hop routes
 - cumulative spend cannot be replenished or increased; deploy a new vault when
   the strategy budget is exhausted
-- owner key rotation is intentionally absent; use a deliberate owner wallet and
-  withdraw before retiring the vault
+- the owner address is immutable; changing ownership requires a new vault.
+  Account-registry key rotation and recovery preserve that address and its authority

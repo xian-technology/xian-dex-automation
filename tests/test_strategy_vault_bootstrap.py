@@ -232,3 +232,29 @@ def read():
             existing_source=existing,
             reviewed_source=reviewed,
         )
+
+
+def test_keeper_backup_preserves_address_and_empty_file_is_not_replaced(tmp_path, monkeypatch):
+    from xian_py.hybrid import AccountTransitionDraft
+
+    legacy = Wallet()
+    draft = AccountTransitionDraft("local-test", legacy.public_key, 0)
+    path = tmp_path / "keeper.json"
+    path.write_text(draft.export_backup("active", "backup test password"))
+    monkeypatch.setenv("XIAN_DEX_AUTOMATION_BACKUP_PASSWORD", "backup test password")
+    wallet, generated = bootstrap._keeper_wallet(path, execute=True)
+    assert wallet.public_key == legacy.public_key
+    assert not generated
+    args = bootstrap._build_parser().parse_args(["--keeper-private-key-file", str(path)])
+    config = bootstrap._service_config(
+        args,
+        rpc_url="http://127.0.0.1:26657",
+        chain_id="local-test",
+        keeper_address=legacy.public_key,
+    )
+    assert config.wallet.active_backup_file == path
+    assert config.wallet.private_key_file is None
+    path.write_text("")
+    with pytest.raises(bootstrap.BootstrapError, match="restore custody"):
+        bootstrap._keeper_wallet(path, execute=True)
+    assert path.read_text() == ""

@@ -240,3 +240,27 @@ unless the environment variables above are provided.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — major components and dependency direction
 - [docs/WALLET_MODEL.md](docs/WALLET_MODEL.md) — wallet model and security boundary
 - [config.example.yaml](config.example.yaml) — annotated example config
+
+## Hybrid service custody
+
+For an already enrolled service account, set `wallet.active_backup_file` to its
+encrypted active backup and `wallet.backup_password_env` to the environment
+variable holding its password (default `XIAN_DEX_AUTOMATION_BACKUP_PASSWORD`).
+Relative paths resolve against the config file. Unset legacy key inputs.
+`network.chain_id` is checked against the backup when configured. The service
+retains the original address, including strategy-vault keeper authority. Admin
+wallet status reports that address; key generation/import is blocked while a
+hybrid backup is configured. Stop execution during rotation, reconcile committed
+state, atomically install the new active file and restart before resuming.
+
+The loader accepts an active-only credential derived with the Python SDK from
+the verified master backup. Keep that master offline; do not install it as the
+service credential. The loader does not enroll accounts or store recovery
+secrets. An enrolled account requires its current hybrid authority.
+
+The strategy-vault bootstrap accepts an encrypted active JSON file at
+`--keeper-private-key-file`; it writes `wallet.active_backup_file` in the service
+config and reads `XIAN_DEX_AUTOMATION_BACKUP_PASSWORD`. Invalid JSON/envelopes do
+not generate a replacement keeper. An enrolled owner can use
+`XIAN_ACTIVE_BACKUP_FILE` / `XIAN_BACKUP_PASSWORD` instead of owner private-key
+inputs; the localnet chain ID is checked.

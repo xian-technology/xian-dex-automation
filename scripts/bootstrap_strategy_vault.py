@@ -13,6 +13,7 @@ from typing import Any
 
 from contracting.compilation.artifacts import compile_contract_source
 from xian_py import Wallet, Xian
+from xian_py.signers import load_signing_wallet
 
 from xian_dex_automation.config import (
     AutomationConfig,
@@ -91,9 +92,20 @@ def _owner_key(network: dict[str, Any], explicit: str | None) -> str:
     return founder
 
 
+def _is_active_backup(path: Path) -> bool:
+    return path.exists() and path.read_text(encoding="utf-8").lstrip().startswith("{")
+
+
 def _keeper_wallet(path: Path, *, execute: bool) -> tuple[Wallet, bool]:
+    if _is_active_backup(path):
+        return load_signing_wallet(
+            active_backup_file=path,
+            backup_password=os.environ.get("XIAN_DEX_AUTOMATION_BACKUP_PASSWORD"),
+        ), False
     if path.exists() and path.read_text(encoding="utf-8").strip():
         return Wallet(path.read_text(encoding="utf-8").strip()), False
+    if path.exists():
+        raise BootstrapError("existing keeper key file is empty; restore custody before continuing")
     wallet = Wallet()
     if execute:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +168,12 @@ def _service_config(
     return AutomationConfig(
         network=NetworkConfig(rpc_url=rpc_url, chain_id=chain_id),
         wallet=WalletConfig(
-            private_key_file=args.keeper_private_key_file.resolve(),
+            private_key_file=None
+            if _is_active_backup(args.keeper_private_key_file)
+            else args.keeper_private_key_file.resolve(),
+            active_backup_file=args.keeper_private_key_file.resolve()
+            if _is_active_backup(args.keeper_private_key_file)
+            else None,
             execute=False,
         ),
         custody=CustodyConfig(
@@ -204,9 +221,7 @@ def _assert_existing_strategy(existing: dict[str, Any], expected: StrategyVaultC
                     f"existing vault {key} mismatch: expected {value}, got {actual}"
                 )
         elif actual != value:
-            raise BootstrapError(
-                f"existing vault {key} mismatch: expected {value}, got {actual}"
-            )
+            raise BootstrapError(f"existing vault {key} mismatch: expected {value}, got {actual}")
 
 
 def _canonical_source_digest(*, module_name: str, source: str) -> str:
@@ -284,9 +299,7 @@ async def _prepare_exercise(
             src=action.src,
             amount_in=action.amount_in,
         )
-        amount_out_min = quote * (
-            (BPS - Decimal(action.max_slippage_bps)) / BPS
-        )
+        amount_out_min = quote * ((BPS - Decimal(action.max_slippage_bps)) / BPS)
         call = await dex.build_swap_exact_in_call(
             snapshot,
             action,
@@ -300,9 +313,7 @@ async def _prepare_exercise(
         )
         estimated_chi = int(estimate["estimated"])
         supplied_chi = int(estimate["suggested"])
-        chi_cost = int(
-            await dex.client.contract("chi_cost").call("current_value")
-        )
+        chi_cost = int(await dex.client.contract("chi_cost").call("current_value"))
         required_currency = _required_keeper_currency(
             supplied_chi=supplied_chi,
             chi_cost=chi_cost,
@@ -423,7 +434,15 @@ def main(argv: list[str] | None = None) -> int:
     network = _read_network(args.network.expanduser().resolve())
     rpc_url = _rpc_url(network, args.rpc_url)
     chain_id = network.get("chain_id")
-    owner_wallet = Wallet(_owner_key(network, args.owner_private_key))
+    owner_backup = os.environ.get("XIAN_ACTIVE_BACKUP_FILE")
+    owner_wallet = load_signing_wallet(
+        private_key=(args.owner_private_key or os.environ.get("XIAN_DEX_VAULT_OWNER_PRIVATE_KEY"))
+        if owner_backup
+        else _owner_key(network, args.owner_private_key),
+        active_backup_file=owner_backup,
+        backup_password=os.environ.get("XIAN_BACKUP_PASSWORD") if owner_backup else None,
+        chain_id=chain_id,
+    )
     keeper_wallet, keeper_was_generated = _keeper_wallet(
         args.keeper_private_key_file.expanduser().resolve(),
         execute=args.execute,
@@ -462,9 +481,7 @@ def main(argv: list[str] | None = None) -> int:
                 source,
                 keeper_wallet.public_key,
             )
-            payload["writes"].append(
-                {"deploy": _require_success("vault deployment", deployed)}
-            )
+            payload["writes"].append({"deploy": _require_success("vault deployment", deployed)})
         else:
             _verify_reusable_source(
                 module_name=args.contract_name,
@@ -492,18 +509,14 @@ def main(argv: list[str] | None = None) -> int:
                 to=args.contract_name,
                 wait_for_tx=True,
             )
-            payload["writes"].append(
-                {"approve": _require_success("vault approval", approved)}
-            )
+            payload["writes"].append({"approve": _require_success("vault approval", approved)})
             deposited = owner_client.contract(args.contract_name).send(
                 "deposit",
                 token=args.src,
                 amount=deposit_delta,
                 wait_for_tx=True,
             )
-            payload["writes"].append(
-                {"deposit": _require_success("vault deposit", deposited)}
-            )
+            payload["writes"].append({"deposit": _require_success("vault deposit", deposited)})
 
         status = owner_client.contract(args.contract_name).call("get_strategy")
         if status.get("paused") is not False:
@@ -513,9 +526,7 @@ def main(argv: list[str] | None = None) -> int:
                     value=False,
                     wait_for_tx=True,
                 )
-                payload["writes"].append(
-                    {"unpause": _require_success("vault unpause", unpaused)}
-                )
+                payload["writes"].append({"unpause": _require_success("vault unpause", unpaused)})
             elif args.execute_swap:
                 raise BootstrapError(
                     "reused vault is paused; review get_strategy() and pass "
@@ -555,9 +566,7 @@ def main(argv: list[str] | None = None) -> int:
             "chi_headroom": KEEPER_MIN_CHI_HEADROOM,
             "supplied_chi": exercise_plan.supplied_chi,
             "chi_cost": exercise_plan.chi_cost,
-            "required_from_estimate": str(
-                exercise_plan.required_currency
-            ),
+            "required_from_estimate": str(exercise_plan.required_currency),
             "target_balance": str(funding_target),
             "balance_before": str(keeper_balance),
             "top_up": str(top_up),
@@ -573,20 +582,14 @@ def main(argv: list[str] | None = None) -> int:
                 "keeper funding",
                 funded,
             )
-            payload["writes"].append(
-                {"keeper_funding": funding_details["submission"]}
-            )
+            payload["writes"].append({"keeper_funding": funding_details["submission"]})
     payload["keeper_funding"] = funding_details
     payload["dry_run"] = exercise_plan.details
     if args.execute_swap:
-        payload["execution"] = asyncio.run(
-            _exercise(service_config, exercise_plan)
-        )
+        payload["execution"] = asyncio.run(_exercise(service_config, exercise_plan))
 
     with Xian(rpc_url, chain_id=chain_id, wallet=owner_wallet) as client:
-        payload["on_chain_strategy"] = client.contract(args.contract_name).call(
-            "get_strategy"
-        )
+        payload["on_chain_strategy"] = client.contract(args.contract_name).call("get_strategy")
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return 0
 

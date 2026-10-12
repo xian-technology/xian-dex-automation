@@ -21,6 +21,8 @@ class DexConfig(BaseModel):
 
 
 class WalletConfig(BaseModel):
+    active_backup_file: Path | None = None
+    backup_password_env: str = "XIAN_DEX_AUTOMATION_BACKUP_PASSWORD"
     private_key_env: str = "XIAN_DEX_AUTOMATION_PRIVATE_KEY"
     private_key_file: Path | None = None
     private_key_file_env: str = "XIAN_DEX_AUTOMATION_PRIVATE_KEY_FILE"
@@ -52,9 +54,7 @@ class StrategyVaultConfig(BaseModel):
         if self.src == self.token_out:
             raise ValueError("strategy vault src and token_out must differ")
         if self.total_spend_cap < self.max_trade_size:
-            raise ValueError(
-                "strategy vault total_spend_cap must be at least max_trade_size"
-            )
+            raise ValueError("strategy vault total_spend_cap must be at least max_trade_size")
         return self
 
 
@@ -65,13 +65,9 @@ class CustodyConfig(BaseModel):
     @model_validator(mode="after")
     def validate_mode(self) -> Self:
         if self.mode == "strategy_vault" and self.strategy_vault is None:
-            raise ValueError(
-                "custody.strategy_vault is required in strategy_vault mode"
-            )
+            raise ValueError("custody.strategy_vault is required in strategy_vault mode")
         if self.mode == "direct_wallet" and self.strategy_vault is not None:
-            raise ValueError(
-                "custody.strategy_vault must be omitted in direct_wallet mode"
-            )
+            raise ValueError("custody.strategy_vault must be omitted in direct_wallet mode")
         return self
 
 
@@ -123,38 +119,23 @@ class AutomationConfig(BaseModel):
             return self
         if self.wallet.recipient is not None:
             raise ValueError(
-                "wallet.recipient must be null in strategy_vault mode; "
-                "the vault retains all output"
+                "wallet.recipient must be null in strategy_vault mode; the vault retains all output"
             )
         for rule in self.rules:
             if rule.trigger.pair_id != strategy.pair_id:
-                raise ValueError(
-                    f"rule {rule.id!r} pair_id exceeds the strategy vault scope"
-                )
+                raise ValueError(f"rule {rule.id!r} pair_id exceeds the strategy vault scope")
             if rule.action.src != strategy.src:
-                raise ValueError(
-                    f"rule {rule.id!r} src exceeds the strategy vault scope"
-                )
+                raise ValueError(f"rule {rule.id!r} src exceeds the strategy vault scope")
             if rule.action.recipient is not None:
-                raise ValueError(
-                    f"rule {rule.id!r} recipient must be null in strategy_vault mode"
-                )
+                raise ValueError(f"rule {rule.id!r} recipient must be null in strategy_vault mode")
             if rule.action.amount_in > strategy.max_trade_size:
-                raise ValueError(
-                    f"rule {rule.id!r} amount_in exceeds strategy max_trade_size"
-                )
+                raise ValueError(f"rule {rule.id!r} amount_in exceeds strategy max_trade_size")
             if rule.action.max_slippage_bps > strategy.max_slippage_bps:
-                raise ValueError(
-                    f"rule {rule.id!r} slippage exceeds strategy maximum"
-                )
+                raise ValueError(f"rule {rule.id!r} slippage exceeds strategy maximum")
             if rule.action.deadline_seconds > strategy.max_deadline_seconds:
-                raise ValueError(
-                    f"rule {rule.id!r} deadline exceeds strategy maximum"
-                )
+                raise ValueError(f"rule {rule.id!r} deadline exceeds strategy maximum")
             if rule.trigger.cooldown_seconds < strategy.cooldown_seconds:
-                raise ValueError(
-                    f"rule {rule.id!r} cooldown is shorter than strategy minimum"
-                )
+                raise ValueError(f"rule {rule.id!r} cooldown is shorter than strategy minimum")
         return self
 
 
@@ -188,6 +169,10 @@ def normalize_config_paths(
     )
     normalized.wallet.private_key_file = _resolve_optional_relative_path(
         normalized.wallet.private_key_file,
+        base_dir=config_dir,
+    )
+    normalized.wallet.active_backup_file = _resolve_optional_relative_path(
+        normalized.wallet.active_backup_file,
         base_dir=config_dir,
     )
     return normalized

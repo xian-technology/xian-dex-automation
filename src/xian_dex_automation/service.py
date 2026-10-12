@@ -19,7 +19,7 @@ from .config import (
     render_config,
     save_config,
 )
-from .dex import resolve_private_key, resolve_private_key_source
+from .dex import resolve_private_key_source, resolve_wallet
 from .storage import AutomationStore
 from .worker import AutomationWorker
 
@@ -110,14 +110,8 @@ def _validate_private_key(private_key: str) -> str:
     return value
 
 
-def _write_private_key_file(
-    path: Path, private_key: str, *, overwrite: bool
-) -> None:
-    if (
-        path.exists()
-        and path.read_text(encoding="utf-8").strip()
-        and not overwrite
-    ):
+def _write_private_key_file(path: Path, private_key: str, *, overwrite: bool) -> None:
+    if path.exists() and path.read_text(encoding="utf-8").strip() and not overwrite:
         raise HTTPException(
             status_code=409,
             detail="wallet key file already exists",
@@ -136,6 +130,8 @@ def _wallet_key_source_changed(
         current.wallet.private_key_env != new_config.wallet.private_key_env
         or current.wallet.private_key_file != new_config.wallet.private_key_file
         or current.wallet.private_key_file_env != new_config.wallet.private_key_file_env
+        or current.wallet.active_backup_file != new_config.wallet.active_backup_file
+        or current.wallet.backup_password_env != new_config.wallet.backup_password_env
     )
 
 
@@ -638,9 +634,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if start_worker:
-            app.state.worker_task = asyncio.create_task(
-                app.state.worker.run_forever()
-            )
+            app.state.worker_task = asyncio.create_task(app.state.worker.run_forever())
         try:
             yield
         finally:
@@ -658,9 +652,7 @@ def create_app(
     app.state.config = config
     app.state.config_path = Path(config_path).resolve() if config_path else None
     app.state.admin_token = (
-        _normalize_admin_token(admin_token)
-        if admin_token is not None
-        else configured_admin_token()
+        _normalize_admin_token(admin_token) if admin_token is not None else configured_admin_token()
     )
     app.state.store = AutomationStore(config.database_path)
     app.state.worker = AutomationWorker(config, app.state.store)
@@ -682,7 +674,8 @@ def create_app(
         strategy = new_config.custody.strategy_vault
         if new_config.wallet.execute and strategy is not None:
             try:
-                address = _wallet_address(resolve_private_key(new_config))
+                signer = resolve_wallet(new_config)
+                address = signer.public_key if signer else None
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if address != strategy.keeper_address:
@@ -721,6 +714,11 @@ def create_app(
         return normalized_for_persist(validated)
 
     def wallet_key_path(current: AutomationConfig) -> Path:
+        if current.wallet.active_backup_file:
+            raise HTTPException(
+                status_code=409,
+                detail="an active hybrid backup is configured; update custody through configuration",
+            )
         if os.environ.get(current.wallet.private_key_env):
             raise HTTPException(
                 status_code=409,
@@ -743,12 +741,10 @@ def create_app(
 
     def wallet_payload() -> dict[str, Any]:
         current = app.state.config
-        private_key = resolve_private_key(current)
-        private_key_source = (
-            resolve_private_key_source(current) if private_key else None
-        )
+        signer = resolve_wallet(current)
+        private_key_source = resolve_private_key_source(current) if signer else None
         strategy = current.custody.strategy_vault
-        address = _wallet_address(private_key)
+        address = signer.public_key if signer else None
         return {
             "execute_enabled": current.wallet.execute,
             "private_key_env": current.wallet.private_key_env,
@@ -763,15 +759,11 @@ def create_app(
             "recipient": current.wallet.recipient,
             "custody_mode": current.custody.mode,
             "keeper_matches_config": (
-                None
-                if strategy is None or address is None
-                else address == strategy.keeper_address
+                None if strategy is None or address is None else address == strategy.keeper_address
             ),
         }
 
-    def persist_wallet_key(
-        private_key: str, *, overwrite: bool
-    ) -> dict[str, Any]:
+    def persist_wallet_key(private_key: str, *, overwrite: bool) -> dict[str, Any]:
         if app.state.config_path is None:
             raise HTTPException(
                 status_code=409,
@@ -868,7 +860,10 @@ def create_app(
         payload: dict[str, Any],
         _admin: None = Depends(_require_admin_token),
     ) -> dict[str, Any]:
-        if "private_key_file" in payload:
+        if any(
+            key in payload
+            for key in ("private_key_file", "active_backup_file", "backup_password_env")
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="wallet private_key_file must be changed through config or environment",
