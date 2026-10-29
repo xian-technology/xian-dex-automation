@@ -92,8 +92,13 @@ def _owner_key(network: dict[str, Any], explicit: str | None) -> str:
 
 
 def _keeper_wallet(path: Path, *, execute: bool) -> tuple[Wallet, bool]:
-    if path.exists() and path.read_text(encoding="utf-8").strip():
-        return Wallet(path.read_text(encoding="utf-8").strip()), False
+    if path.exists():
+        private_key = path.read_text(encoding="utf-8").strip()
+        if not private_key:
+            raise BootstrapError(
+                "existing keeper key file is empty; restore custody before continuing"
+            )
+        return Wallet(private_key), False
     wallet = Wallet()
     if execute:
         path.parent.mkdir(parents=True, exist_ok=True)

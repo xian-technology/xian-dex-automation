@@ -22,6 +22,27 @@ sys.modules[SPEC.name] = bootstrap
 SPEC.loader.exec_module(bootstrap)
 
 
+@pytest.mark.parametrize("execute", [False, True])
+@pytest.mark.parametrize("contents", ["", " \n\t"])
+def test_existing_empty_keeper_file_is_not_replaced(tmp_path, execute, contents):
+    path = tmp_path / "keeper.key"
+    path.write_text(contents)
+    with pytest.raises(bootstrap.BootstrapError, match="empty.*restore"):
+        bootstrap._keeper_wallet(path, execute=execute)
+    assert path.read_text() == contents
+
+
+def test_existing_keeper_key_is_preserved(tmp_path):
+    expected = Wallet()
+    path = tmp_path / "keeper.key"
+    contents = expected.private_key + "\n"
+    path.write_text(contents)
+    wallet, generated = bootstrap._keeper_wallet(path, execute=True)
+    assert wallet.public_key == expected.public_key
+    assert not generated
+    assert path.read_text() == contents
+
+
 def test_default_bootstrap_is_a_read_only_plan(tmp_path, capsys) -> None:
     owner = Wallet()
     network_path = tmp_path / "network.json"

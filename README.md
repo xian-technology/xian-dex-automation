@@ -118,6 +118,12 @@ dedicated local key file at
 dry-run mode until execution is explicitly enabled. Enter the admin token in
 the UI to manage rules, wallet settings, config, and manual evaluations.
 
+Existing service configurations keep their configured key source unless an
+operator explicitly overrides it. The stack generates a default key only when
+creating a configuration. Strategy-vault bootstrap and stack key creation refuse
+existing empty key files; restore the intended keeper key instead of replacing
+its identity automatically.
+
 ## Principles
 
 - **Deterministic, rule-driven execution.** The service evaluates explicit
