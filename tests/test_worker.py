@@ -4,6 +4,9 @@ import asyncio
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+from xian_py.models import TransactionSubmission
+
 from xian_dex_automation.config import (
     AutomationConfig,
     PriceMoveTriggerConfig,
@@ -24,10 +27,12 @@ class FakeDex:
         quote: Decimal = Decimal("10"),
         quote_error: Exception | None = None,
         swap_error: Exception | None = None,
+        submission: TransactionSubmission | None = None,
     ) -> None:
         self.quote = quote
         self.quote_error = quote_error
         self.swap_error = swap_error
+        self.submission = submission
         self.quote_calls: list[dict] = []
         self.swap_calls: list[dict] = []
 
@@ -53,7 +58,15 @@ class FakeDex:
         )
         if self.swap_error is not None:
             raise self.swap_error
-        return SimpleNamespace(tx_hash="TX123")
+        return self.submission or TransactionSubmission.from_dict(
+            {
+                "submitted": True,
+                "accepted": True,
+                "finalized": True,
+                "tx_hash": "TX123",
+                "receipt": {"success": True},
+            }
+        )
 
 
 def make_rule() -> RuleConfig:
@@ -155,6 +168,42 @@ def test_worker_records_submission_failures(tmp_path) -> None:
     assert runs[0]["status"] == "failed"
     assert runs[0]["reason"] == "submission_failed"
     assert runs[0]["details"]["error"] == "swap failed"
+
+
+@pytest.mark.parametrize(
+    "outcome, error",
+    [
+        ({"accepted": False, "message": "CheckTx failed"}, "CheckTx failed"),
+        ({"accepted": False}, "transaction rejected"),
+        ({"receipt": {"success": False, "message": "slippage exceeded"}}, "slippage exceeded"),
+        ({"receipt": {"success": False}}, "swap execution failed"),
+    ],
+)
+def test_worker_does_not_record_rejected_or_reverted_swaps_as_actions(
+    tmp_path, outcome, error
+) -> None:
+    worker, store, rule = make_worker(tmp_path, execute=True)
+    submission = TransactionSubmission.from_dict(
+        {
+            "submitted": True,
+            "accepted": True,
+            "finalized": True,
+            "tx_hash": "FAILED123",
+            **outcome,
+        }
+    )
+    dex = FakeDex(submission=submission)
+
+    result = asyncio.run(worker._evaluate_rule(dex, rule, make_snapshot()))
+
+    assert result["status"] == "failed"
+    state = store.get_rule_state(rule.id)
+    assert state.baseline_price == Decimal("1")
+    assert state.last_action_at is None
+    run = store.list_runs()[0]
+    assert run["status"] == "failed"
+    assert run["tx_hash"] == "FAILED123"
+    assert run["details"]["error"] == error
 
 
 def test_worker_uses_pair_id_from_sync_event(tmp_path) -> None:

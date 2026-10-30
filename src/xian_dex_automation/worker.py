@@ -6,8 +6,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from xian_py.models import TransactionSubmission
+
 from .config import AutomationConfig, RuleConfig
-from .dex import BPS, DexClient, PairSnapshot
+from .dex import BPS, DexAutomationError, DexClient, PairSnapshot
 from .rules import RuleRuntimeState, evaluate_price_move
 from .storage import AutomationStore
 
@@ -16,6 +18,13 @@ logger = logging.getLogger(__name__)
 
 def _decimal_details(value: Decimal | None) -> str | None:
     return str(value) if value is not None else None
+
+
+def _check_swap_outcome(submission: TransactionSubmission) -> None:
+    if submission.accepted is False:
+        raise DexAutomationError(submission.message or "transaction rejected")
+    if submission.receipt is not None and not submission.receipt.success:
+        raise DexAutomationError(submission.receipt.message or "swap execution failed")
 
 
 class AutomationWorker:
@@ -160,29 +169,32 @@ class AutomationWorker:
                 "details": details,
             }
 
+        tx_hash = None
         try:
             submission = await dex.swap_exact_in(
                 snapshot,
                 rule.action,
                 amount_out_min=amount_out_min,
             )
+            tx_hash = submission.tx_hash
+            _check_swap_outcome(submission)
         except Exception as exc:
             details["error"] = str(exc)
             self.store.append_run(
                 rule_id=rule.id,
                 status="failed",
                 reason="submission_failed",
-                tx_hash=None,
+                tx_hash=tx_hash,
                 details=details,
             )
             return {
                 "rule_id": rule.id,
                 "status": "failed",
                 "reason": "submission_failed",
+                "tx_hash": tx_hash,
                 "details": details,
             }
 
-        tx_hash = getattr(submission, "tx_hash", None)
         self._record_action_state(rule, decision, now)
         self.store.append_run(
             rule_id=rule.id,

@@ -208,6 +208,9 @@ When the API is running:
 
 `POST /evaluate/{pair_id}` evaluates matching rules once. In dry-run mode
 it records what would have happened without submitting a transaction.
+Rejected transactions and failed execution receipts are logged as failed runs
+with their transaction hash when available. They leave the rule's baseline and
+cooldown unchanged.
 
 ## Key Directories
 
