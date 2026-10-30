@@ -8,8 +8,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from xian_py import transaction as tr
+
 from .config import AutomationConfig, SwapExactInActionConfig
 from .credentials import credential_source
+from .submission import PreparedSwap
 
 BPS = Decimal("10000")
 DEADLINE_SAFETY_MARGIN_SECONDS = 5
@@ -358,3 +361,42 @@ class DexClient:
             chi=chi,
             wait_for_tx=True,
         )
+
+    async def prepare_swap(
+        self,
+        snapshot: PairSnapshot,
+        action: SwapExactInActionConfig,
+        *,
+        amount_out_min: Decimal,
+    ) -> PreparedSwap:
+        plan = await self.build_swap_exact_in_call(snapshot, action, amount_out_min=amount_out_min)
+        return await self.prepare_call_plan(plan)
+
+    async def prepare_call_plan(self, plan: ContractCallPlan) -> PreparedSwap:
+        """Sign once; the execution journal must persist this before broadcast."""
+        if self.wallet_address is None:
+            raise DexAutomationError("execution requires a configured signing wallet")
+        chain_id = await self.client.get_chain_id()
+        if self.config.network.chain_id not in (None, chain_id):
+            raise DexAutomationError("RPC chain does not match the configured chain")
+        estimate = await self.client.estimate_chi(plan.contract, plan.function, plan.kwargs)
+        nonce = await tr.get_nonce_async(
+            self.client.node_url,
+            self.wallet_address,
+            session=self.client.session,
+        )
+        transaction = tr.prepare_transaction(
+            tr.create_tx(
+                {
+                    "chain_id": chain_id,
+                    "sender": self.wallet_address,
+                    "contract": plan.contract,
+                    "function": plan.function,
+                    "kwargs": plan.kwargs,
+                    "nonce": nonce,
+                    "chi_supplied": estimate["suggested"],
+                },
+                self.client.wallet,
+            )
+        )
+        return PreparedSwap(self.client.node_url, chain_id, transaction)

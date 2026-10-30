@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from xian_py.models import TransactionSubmission
+from test_execution_journal import prepared_swap
+from test_submission_recovery import receipt
 
 from xian_dex_automation.config import (
     AutomationConfig,
@@ -27,12 +29,10 @@ class FakeDex:
         quote: Decimal = Decimal("10"),
         quote_error: Exception | None = None,
         swap_error: Exception | None = None,
-        submission: TransactionSubmission | None = None,
     ) -> None:
         self.quote = quote
         self.quote_error = quote_error
         self.swap_error = swap_error
-        self.submission = submission
         self.quote_calls: list[dict] = []
         self.swap_calls: list[dict] = []
 
@@ -48,7 +48,7 @@ class FakeDex:
             raise self.quote_error
         return self.quote
 
-    async def swap_exact_in(self, snapshot, action, *, amount_out_min):
+    async def prepare_swap(self, snapshot, action, *, amount_out_min):
         self.swap_calls.append(
             {
                 "snapshot": snapshot,
@@ -58,15 +58,10 @@ class FakeDex:
         )
         if self.swap_error is not None:
             raise self.swap_error
-        return self.submission or TransactionSubmission.from_dict(
-            {
-                "submitted": True,
-                "accepted": True,
-                "finalized": True,
-                "tx_hash": "TX123",
-                "receipt": {"success": True},
-            }
-        )
+        return prepared_swap()
+
+    async def get_pair_snapshot(self, pair_id):
+        return make_snapshot()
 
 
 def make_rule() -> RuleConfig:
@@ -112,7 +107,7 @@ def test_worker_records_dry_run_and_updates_cooldown_state(tmp_path) -> None:
     worker, store, rule = make_worker(tmp_path, execute=False)
     dex = FakeDex()
 
-    result = asyncio.run(worker._evaluate_rule(dex, rule, make_snapshot()))
+    result = asyncio.run(worker.evaluate_pair(dex, 1))[0]
 
     assert result["status"] == "dry_run"
     assert result["reason"] == "price_move_threshold_reached"
@@ -127,25 +122,25 @@ def test_worker_records_dry_run_and_updates_cooldown_state(tmp_path) -> None:
     assert runs[0]["details"]["amount_out_min"] == "9.90"
 
 
-def test_worker_submits_swap_when_execution_is_enabled(tmp_path) -> None:
+def test_worker_submits_swap_when_execution_is_enabled(tmp_path, network) -> None:
     worker, store, rule = make_worker(tmp_path, execute=True)
     dex = FakeDex()
 
-    result = asyncio.run(worker._evaluate_rule(dex, rule, make_snapshot()))
+    result = asyncio.run(worker.evaluate_pair(dex, 1))[0]
 
     assert result["status"] == "submitted"
-    assert result["tx_hash"] == "TX123"
+    assert result["tx_hash"] == prepared_swap().transaction.tx_hash
     assert dex.swap_calls[0]["amount_out_min"] == Decimal("9.900")
     runs = store.list_runs()
     assert runs[0]["status"] == "submitted"
-    assert runs[0]["tx_hash"] == "TX123"
+    assert runs[0]["tx_hash"] == prepared_swap().transaction.tx_hash
 
 
 def test_worker_records_quote_failures(tmp_path) -> None:
     worker, store, rule = make_worker(tmp_path, execute=True)
     dex = FakeDex(quote_error=RuntimeError("quote failed"))
 
-    result = asyncio.run(worker._evaluate_rule(dex, rule, make_snapshot()))
+    result = asyncio.run(worker.evaluate_pair(dex, 1))[0]
 
     assert result["status"] == "failed"
     assert result["reason"] == "quote_failed"
@@ -160,7 +155,7 @@ def test_worker_records_submission_failures(tmp_path) -> None:
     worker, store, rule = make_worker(tmp_path, execute=True)
     dex = FakeDex(swap_error=RuntimeError("swap failed"))
 
-    result = asyncio.run(worker._evaluate_rule(dex, rule, make_snapshot()))
+    result = asyncio.run(worker.evaluate_pair(dex, 1))[0]
 
     assert result["status"] == "failed"
     assert result["reason"] == "submission_failed"
@@ -180,21 +175,25 @@ def test_worker_records_submission_failures(tmp_path) -> None:
     ],
 )
 def test_worker_does_not_record_rejected_or_reverted_swaps_as_actions(
-    tmp_path, outcome, error
+    tmp_path, outcome, error, network
 ) -> None:
     worker, store, rule = make_worker(tmp_path, execute=True)
-    submission = TransactionSubmission.from_dict(
-        {
-            "submitted": True,
-            "accepted": True,
-            "finalized": True,
-            "tx_hash": "FAILED123",
-            **outcome,
-        }
-    )
-    dex = FakeDex(submission=submission)
+    if outcome.get("accepted") is False:
+        network.rejection = outcome.get("message") or "transaction rejected"
+        network.on_broadcast = None
+    else:
+        # Exercise both explicit and missing execution-error messages.
+        network.on_broadcast = lambda tx: setattr(
+            network,
+            "receipt",
+            replace(
+                receipt(tx, False),
+                message=outcome["receipt"].get("message"),
+            ),
+        )
+    dex = FakeDex()
 
-    result = asyncio.run(worker._evaluate_rule(dex, rule, make_snapshot()))
+    result = asyncio.run(worker.evaluate_pair(dex, 1))[0]
 
     assert result["status"] == "failed"
     state = store.get_rule_state(rule.id)
@@ -202,7 +201,7 @@ def test_worker_does_not_record_rejected_or_reverted_swaps_as_actions(
     assert state.last_action_at is None
     run = store.list_runs()[0]
     assert run["status"] == "failed"
-    assert run["tx_hash"] == "FAILED123"
+    assert run["tx_hash"] == prepared_swap().transaction.tx_hash
     assert run["details"]["error"] == error
 
 

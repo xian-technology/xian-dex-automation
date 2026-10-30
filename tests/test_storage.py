@@ -40,3 +40,11 @@ def test_runs_and_cursor_round_trip(tmp_path) -> None:
     runs = store.list_runs()
     assert runs[0]["status"] == "dry_run"
     assert runs[0]["details"] == {"pair_id": 1}
+
+
+def test_competing_watchers_cannot_move_cursor_backwards(tmp_path):
+    store = AutomationStore(tmp_path / "automation.sqlite3")
+    other = AutomationStore(store.path)
+    store.save_cursor("con_pairs:Sync", 42)
+    other.save_cursor("con_pairs:Sync", 41)
+    assert store.get_cursor("con_pairs:Sync") == 42

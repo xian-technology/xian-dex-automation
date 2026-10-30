@@ -268,6 +268,25 @@ rules: []
     assert load_config(config_path).wallet.private_key_file is None
 
 
+def test_config_cannot_switch_away_from_execution_database(tmp_path):
+    from test_execution_journal import begin
+
+    client, config_path = make_client(tmp_path)
+    store = client.app.state.store
+    pending = begin(store)
+    original = config_path.read_text()
+    response = client.put(
+        "/config.yaml",
+        content=original.replace("automation.sqlite3", "other.sqlite3"),
+        headers={**admin_headers(), "content-type": "text/plain"},
+    )
+    assert response.status_code == 409
+    assert "database" in response.json()["detail"]
+    assert config_path.read_text() == original
+    assert client.app.state.worker.store is store
+    assert store.pending_execution().run_id == pending.run_id
+
+
 def test_rule_and_wallet_settings_survive_app_restart(tmp_path) -> None:
     client, config_path = make_client(tmp_path)
     rule = {

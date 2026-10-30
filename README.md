@@ -100,6 +100,49 @@ The service calls the vault's constrained `execute_swap` entrypoint and cannot
 choose an output recipient. See [docs/WALLET_MODEL.md](docs/WALLET_MODEL.md) for
 deployment and localnet exercise commands.
 
+### Interrupted Swaps and Concurrent Evaluations
+
+The worker journals the exact signed transaction in SQLite before broadcasting.
+API evaluations and event workers using the same database on one host share an
+execution lock. Only one swap may be unresolved at a time, across all rules.
+Concurrent manual evaluations return `execution_busy`; event processing waits
+before advancing its cursor.
+
+On startup and at each polling interval, recovery checks the saved transaction
+hash on its original RPC and chain. When execution is enabled, it may rebroadcast
+the same signed bytes, nonce, and deadline. It never signs a replacement for an
+unresolved transaction. Recovery works even if the rule was removed or the
+signing key is unavailable. With `wallet.execute: false`, recovery only checks
+receipts and does not broadcast.
+
+`GET /runs` exposes the existing run as `pending`, including its hash and any
+`details.recovery_error`. Confirmed success atomically records the run, updates
+the baseline, and starts cooldown at reconciliation time. Confirmed failure or a
+definitive rejection of the first broadcast records failure without advancing
+rule state. A timeout, missing receipt, or rejection after an uncertain earlier
+broadcast leaves the run pending and blocks new trades.
+
+If recovery cannot establish an outcome, restore access to the original RPC and
+its transaction history. Do not delete the journal or reset the database to
+resume trading: the original transaction may already have executed. A pruned
+receipt or expired transaction can require operator investigation; expiry alone
+does not prove it never executed. Pre-upgrade submissions without a journal
+cannot be recovered automatically.
+
+Use a dedicated signer and a single database path on a local filesystem, on
+Linux or macOS. Separate databases, remote filesystems, external transactions
+from the same signer, and duplicated deployments are outside this coordination
+boundary. Keep the adjacent `.execution.lock` file in place while any process
+is running. Database path changes through the API return HTTP 409: stop all
+workers and API processes before migrating the existing database. Back up the
+database, including its execution journal, as one consistent SQLite snapshot.
+
+Restart workers after changing network, custody, or signing settings; the live
+configuration endpoints do not recreate an existing worker's RPC client or
+signer. Event delivery remains replayable after a crash; configure baseline
+reset and cooldown to match the intended strategy, rather than relying on
+exactly-once event delivery.
+
 ### Stack-Managed Sidecar
 
 When this repo lives next to `xian-stack`, the backend runs it as an

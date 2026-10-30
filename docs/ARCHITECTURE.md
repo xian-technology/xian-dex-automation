@@ -16,6 +16,39 @@ The executor is a Python worker built on `xian-py`. It:
 
 This is the only component that should run unattended.
 
+### Submission Ownership and Recovery
+
+`storage.AutomationStore.execution_lock` uses a nonblocking POSIX advisory lock
+on a stable sidecar file beside the resolved SQLite path. Every worker and API
+evaluation holds it across snapshot, decision, signing, and reconciliation.
+Kernel lock release handles process death; there is no expiring lease that
+could permit a second writer while the first is still submitting.
+
+`dex.DexClient.prepare_swap` uses `xian-py` to prepare an immutable signed
+transaction without broadcasting. A transaction in SQLite creates its `pending`
+run and singleton `pending_execution` journal together. The journal contains
+signed bytes, hash, original RPC/chain, target baseline, and a durable
+`broadcast_attempted` marker. No private key is stored.
+
+`execution.reconcile_execution` runs under the same execution lock. It marks an
+attempt before sending any bytes through `submission.SwapTransport`. Recovery
+first looks up an attempted transaction; any rebroadcast preserves its identity.
+Only a receipt or a definitive first-attempt CheckTx rejection can finalize it.
+An ambiguous attempt cannot be discarded based on a later rejection. Completion
+updates the run and, on success, rule state, then removes the journal in one
+SQLite transaction. A failed commit leaves the original pending record intact.
+
+Startup recovery precedes event watching. A background recovery task also runs
+without new events. Pending submissions block fresh signing; event-triggered
+submissions wait for reconciliation without repeatedly evaluating their trigger.
+Busy or deferred event evaluations retry before cursor advancement, and cursor
+writes cannot move backward. Event delivery itself is not exactly-once.
+
+This coordination is local to one database on one host. Runtime database
+switches are rejected by the API so they cannot strand a journal. Other live
+configuration changes still require an operator restart to recreate the worker's
+RPC client and signer; the journal always retains the original submission network.
+
 ## API
 
 The FastAPI service exposes status, configured rules, recorded runs, wallet

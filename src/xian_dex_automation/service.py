@@ -668,9 +668,6 @@ def create_app(
 
     def apply_config(new_config: AutomationConfig) -> None:
         app.state.config = new_config
-        if app.state.store.path != new_config.database_path:
-            app.state.store = AutomationStore(new_config.database_path)
-            app.state.worker.store = app.state.store
         app.state.worker.config = new_config
 
     def persist_config(new_config: AutomationConfig) -> None:
@@ -678,6 +675,11 @@ def create_app(
             raise HTTPException(
                 status_code=409,
                 detail="config writes require a config path",
+            )
+        if new_config.database_path.resolve() != app.state.store.path:
+            raise HTTPException(
+                status_code=409,
+                detail="database_path changes require stopping the service and migrating its database",
             )
         strategy = new_config.custody.strategy_vault
         if new_config.wallet.execute and strategy is not None:

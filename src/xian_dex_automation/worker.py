@@ -6,10 +6,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from xian_py.models import TransactionSubmission
-
 from .config import AutomationConfig, RuleConfig
-from .dex import BPS, DexAutomationError, DexClient, PairSnapshot
+from .dex import BPS, DexClient, PairSnapshot
+from .execution import reconcile_execution
 from .rules import RuleRuntimeState, evaluate_price_move
 from .storage import AutomationStore
 
@@ -20,11 +19,8 @@ def _decimal_details(value: Decimal | None) -> str | None:
     return str(value) if value is not None else None
 
 
-def _check_swap_outcome(submission: TransactionSubmission) -> None:
-    if submission.accepted is False:
-        raise DexAutomationError(submission.message or "transaction rejected")
-    if submission.receipt is not None and not submission.receipt.success:
-        raise DexAutomationError(submission.receipt.message or "swap execution failed")
+def _execution_blocked(result: dict[str, Any]) -> bool:
+    return result["status"] == "pending" or result["reason"] == "execution_busy"
 
 
 class AutomationWorker:
@@ -33,6 +29,27 @@ class AutomationWorker:
         self.store = store
 
     async def run_forever(self) -> None:
+        # Recovery needs the persisted network and bytes, never a signing key.
+        while self.store.pending_execution() is not None:
+            await self.recover_once()
+            await asyncio.sleep(self.config.network.poll_interval_seconds)
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(self._watch_events())
+            tasks.create_task(self._recovery_loop())
+
+    async def _recovery_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.config.network.poll_interval_seconds)
+            await self.recover_once()
+
+    async def recover_once(self) -> dict[str, Any] | None:
+        store = self.store
+        with store.execution_lock() as claimed:
+            if not claimed:
+                return {"status": "skipped", "reason": "execution_busy"}
+            return await reconcile_execution(store, allow_broadcast=self.config.wallet.execute)
+
+    async def _watch_events(self) -> None:
         cursor_name = f"{self.config.dex.pairs_contract}:Sync"
         cursor = self.store.get_cursor(cursor_name)
         async with DexClient(self.config) as dex:
@@ -47,12 +64,34 @@ class AutomationWorker:
             )
             async for event in event_client.watch(after_id=cursor):
                 for pair_id in self._pair_ids_from_event(event):
-                    await self.evaluate_pair(dex, pair_id)
+                    await self._evaluate_event_pair(dex, pair_id)
                 if event.id is not None:
                     self.store.save_cursor(cursor_name, int(event.id))
                     cursor = int(event.id)
 
+    async def _evaluate_event_pair(self, dex: DexClient, pair_id: int) -> None:
+        while True:
+            results = await self.evaluate_pair(dex, pair_id)
+            if any(result["reason"] == "submission_pending" for result in results):
+                # This event already created a durable submission. Reconcile it,
+                # without evaluating the same event into another signed swap.
+                await self._wait_for_execution()
+                return
+            if not any(_execution_blocked(result) for result in results):
+                return
+            await asyncio.sleep(self.config.network.poll_interval_seconds)
+
+    async def _wait_for_execution(self) -> None:
+        while True:
+            await asyncio.sleep(self.config.network.poll_interval_seconds)
+            result = await self.recover_once()
+            if result is None or not _execution_blocked(result):
+                return
+
     async def evaluate_pair_once(self, pair_id: int) -> list[dict[str, Any]]:
+        recovered = await self.recover_once()
+        if recovered is not None:
+            return [recovered]
         async with DexClient(self.config) as dex:
             return await self.evaluate_pair(dex, pair_id)
 
@@ -61,11 +100,28 @@ class AutomationWorker:
         dex: DexClient,
         pair_id: int,
     ) -> list[dict[str, Any]]:
+        store = self.store
+        with store.execution_lock() as claimed:
+            if not claimed:
+                return [{"status": "skipped", "reason": "execution_busy", "pair_id": pair_id}]
+            # Bind this evaluation to one configuration and database even if
+            # the admin API replaces the worker's settings while we await RPC.
+            evaluator = AutomationWorker(self.config.model_copy(deep=True), store)
+            return await evaluator._evaluate_pair_locked(dex, pair_id)
+
+    async def _evaluate_pair_locked(self, dex: DexClient, pair_id: int) -> list[dict[str, Any]]:
+        recovered = await reconcile_execution(
+            self.store, allow_broadcast=self.config.wallet.execute
+        )
+        if recovered is not None and recovered["status"] == "pending":
+            return [{**recovered, "reason": "recovery_pending"}]
         snapshot = await dex.get_pair_snapshot(pair_id)
-        results: list[dict[str, Any]] = []
+        results: list[dict[str, Any]] = [recovered] if recovered is not None else []
         for rule in self._matching_rules(pair_id):
             result = await self._evaluate_rule(dex, rule, snapshot)
             results.append(result)
+            if result["status"] == "pending":
+                break
         return results
 
     async def _evaluate_rule(
@@ -99,10 +155,7 @@ class AutomationWorker:
             ),
         }
 
-        if (
-            decision.next_baseline_price is not None
-            and not decision.should_execute
-        ):
+        if decision.next_baseline_price is not None and not decision.should_execute:
             self.store.save_rule_state(
                 rule.id,
                 RuleRuntimeState(
@@ -141,9 +194,7 @@ class AutomationWorker:
                 "details": details,
             }
 
-        amount_out_min = quote * (
-            (BPS - Decimal(rule.action.max_slippage_bps)) / BPS
-        )
+        amount_out_min = quote * ((BPS - Decimal(rule.action.max_slippage_bps)) / BPS)
         details.update(
             {
                 "amount_in": str(rule.action.amount_in),
@@ -169,67 +220,48 @@ class AutomationWorker:
                 "details": details,
             }
 
-        tx_hash = None
         try:
-            submission = await dex.swap_exact_in(
+            prepared = await dex.prepare_swap(
                 snapshot,
                 rule.action,
                 amount_out_min=amount_out_min,
             )
-            tx_hash = submission.tx_hash
-            _check_swap_outcome(submission)
         except Exception as exc:
             details["error"] = str(exc)
             self.store.append_run(
                 rule_id=rule.id,
                 status="failed",
                 reason="submission_failed",
-                tx_hash=tx_hash,
+                tx_hash=None,
                 details=details,
             )
             return {
                 "rule_id": rule.id,
                 "status": "failed",
                 "reason": "submission_failed",
-                "tx_hash": tx_hash,
+                "tx_hash": None,
                 "details": details,
             }
 
-        self._record_action_state(rule, decision, now)
-        self.store.append_run(
+        # A failed journal write propagates: nothing may broadcast beforehand.
+        self.store.begin_execution(
             rule_id=rule.id,
-            status="submitted",
+            prepared=prepared,
+            next_baseline_price=decision.next_baseline_price,
             reason=decision.reason,
-            tx_hash=tx_hash,
             details=details,
         )
-        return {
-            "rule_id": rule.id,
-            "status": "submitted",
-            "reason": decision.reason,
-            "tx_hash": tx_hash,
-            "details": details,
-        }
+        return await reconcile_execution(self.store, allow_broadcast=True)
 
-    def _record_action_state(
-        self,
-        rule: RuleConfig,
-        decision: Any,
-        now: datetime,
-    ) -> None:
+    def _record_action_state(self, rule: RuleConfig, decision: Any, now: datetime) -> None:
         self.store.save_rule_state(
             rule.id,
-            RuleRuntimeState(
-                baseline_price=decision.next_baseline_price,
-                last_action_at=now,
-            ),
+            RuleRuntimeState(baseline_price=decision.next_baseline_price, last_action_at=now),
         )
 
     def _matching_rules(self, pair_id: int) -> list[RuleConfig]:
         return [
-            rule
-            for rule in self.config.rules
-            if rule.enabled and rule.trigger.pair_id == pair_id
+            rule for rule in self.config.rules if rule.enabled and rule.trigger.pair_id == pair_id
         ]
 
     @staticmethod
@@ -249,13 +281,7 @@ class AutomationWorker:
 
         # Current con_pairs Sync events contain only reserve values. Evaluate
         # each configured pair so those events still drive deterministic rules.
-        return sorted(
-            {
-                rule.trigger.pair_id
-                for rule in self.config.rules
-                if rule.enabled
-            }
-        )
+        return sorted({rule.trigger.pair_id for rule in self.config.rules if rule.enabled})
 
 
 async def sleep_forever() -> None:
