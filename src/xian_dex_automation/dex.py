@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from .config import AutomationConfig, SwapExactInActionConfig
+from .credentials import credential_source
 
 BPS = Decimal("10000")
 DEADLINE_SAFETY_MARGIN_SECONDS = 5
@@ -29,16 +30,13 @@ def install_contracting_decimal_context() -> None:
 def _resolve_private_key(
     config: AutomationConfig,
 ) -> tuple[str | None, str | None]:
-    env_value = os.environ.get(config.wallet.private_key_env)
-    if env_value:
-        return env_value.strip(), config.wallet.private_key_env
-
-    file_env_value = os.environ.get(config.wallet.private_key_file_env)
-    key_file = file_env_value or config.wallet.private_key_file
-    if key_file is None:
+    kind, source = credential_source(config)
+    if kind == "environment":
+        return os.environ[source].strip(), source
+    if source is None:
         return None, None
 
-    key_path = key_file if isinstance(key_file, str) else str(key_file)
+    key_path = source
     try:
         with open(key_path, encoding="utf-8") as key_file_obj:
             value = key_file_obj.read().strip()

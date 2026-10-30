@@ -124,6 +124,21 @@ creating a configuration. Strategy-vault bootstrap and stack key creation refuse
 existing empty key files; restore the intended keeper key instead of replacing
 its identity automatically.
 
+Inspect the configured credential source without reading key files or contacting
+a node:
+
+```bash
+uv run python -m xian_dex_automation.credentials --config config.yaml
+```
+
+The JSON result contains only `kind` (`environment`, `file`, or `null`) and
+`source` (the environment-variable name, absolute file path, or `null`). Selection
+uses the same precedence as execution: the configured private-key environment
+variable, then the configured file environment variable, then the configured
+file path. Relative config paths resolve beside the configuration; relative
+file environment overrides resolve from the process working directory. This
+describes the selected source, not whether its key is present or valid.
+
 ## Principles
 
 - **Deterministic, rule-driven execution.** The service evaluates explicit
