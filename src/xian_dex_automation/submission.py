@@ -60,6 +60,18 @@ class SwapTransport:
         if await self.client.get_chain_id() != self.prepared.chain_id:
             raise ValueError("RPC chain does not match the persisted transaction chain")
 
+    async def nonce_consumed(self) -> bool:
+        await self._check_chain()
+        payload = json.loads(self.prepared.transaction.json_bytes)["payload"]
+        # /get_next_nonce includes mempool reservations. Read the committed
+        # nonce storage key (__n.<sender>:) instead, through the SDK state API.
+        nonce = await self.client.get_state("__n", payload["sender"], "")
+        if nonce is None:
+            return False
+        if type(nonce) is not int or nonce < 0:
+            raise ValueError("invalid committed nonce")
+        return nonce >= payload["nonce"]
+
     async def broadcast(self) -> str | None:
         await self._check_chain()
         data = await tr.broadcast_tx_wait_async(

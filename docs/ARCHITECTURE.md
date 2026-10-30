@@ -33,10 +33,20 @@ signed bytes, hash, original RPC/chain, target baseline, and a durable
 `execution.reconcile_execution` runs under the same execution lock. It marks an
 attempt before sending any bytes through `submission.SwapTransport`. Recovery
 first looks up an attempted transaction; any rebroadcast preserves its identity.
-Only a receipt or a definitive first-attempt CheckTx rejection can finalize it.
+A receipt or definitive first-attempt CheckTx rejection records a known outcome.
 An ambiguous attempt cannot be discarded based on a later rejection. Completion
 updates the run and, on success, rule state, then removes the journal in one
 SQLite transaction. A failed commit leaves the original pending record intact.
+
+When receipt lookup fails, `SwapTransport.nonce_consumed` reads the committed
+`__n.<sender>:` state key on the saved chain; it never uses mempool next-nonce
+reservations. A consumed nonce atomically moves the signed record into
+`uncertain_executions`, marks its run `outcome_unknown`, and frees the shared
+pending slot. Only the originating rule is held. Its evaluations perform bounded,
+read-only receipt checks; independent rules use fresh snapshots and simulation.
+A restored receipt atomically updates the existing run, clears the hold, and
+resets the rule baseline plus cooldown, so the old decision is not replayed.
+Market/configuration resets do not remove uncertainty records.
 
 Startup recovery precedes event watching. A background recovery task also runs
 without new events. Pending submissions block fresh signing; event-triggered

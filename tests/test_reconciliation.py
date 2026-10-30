@@ -15,6 +15,7 @@ class Network:
         self.error = None
         self.rejection = None
         self.on_broadcast = None
+        self.nonce_consumed = False
 
     def transport(self, prepared):
         network = self
@@ -28,6 +29,9 @@ class Network:
 
             async def lookup(self):
                 return network.receipt
+
+            async def nonce_consumed(self):
+                return network.nonce_consumed
 
             async def broadcast(self):
                 network.broadcasts.append(prepared.transaction.json_bytes)

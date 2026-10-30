@@ -1,5 +1,6 @@
 """Recover a journaled swap under the database's execution lock."""
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -7,7 +8,9 @@ from .storage import AutomationStore
 from .submission import PendingExecution, SwapTransport
 
 
-async def reconcile_execution(store: AutomationStore, *, allow_broadcast: bool, rpc_url: str | None = None):
+async def reconcile_execution(
+    store: AutomationStore, *, allow_broadcast: bool, rpc_url: str | None = None
+):
     pending = store.pending_execution()
     if pending is None:
         return None
@@ -30,9 +33,11 @@ async def reconcile_execution(store: AutomationStore, *, allow_broadcast: bool, 
 
 async def _reconcile(store, pending, transport, allow_broadcast):
     if pending.broadcast_attempted:
-        receipt = await transport.lookup()
+        receipt = await _lookup_receipt(transport)
         if receipt is not None:
             return _finish_receipt(store, pending, receipt)
+        if await transport.nonce_consumed():
+            return store.release_consumed_execution(pending.run_id)
     if not allow_broadcast:
         return pending.result()
 
@@ -60,3 +65,36 @@ def _finish_receipt(store: AutomationStore, pending: PendingExecution, receipt):
         error=receipt.message,
         now=datetime.now(UTC),
     )
+
+
+async def reconcile_uncertain_rule(store: AutomationStore, rule_id: str) -> bool:
+    """Return whether a rule remains held; never rebroadcast consumed nonces."""
+    pending = store.uncertain_execution(rule_id)
+    if pending is None:
+        return False
+    try:
+        async with asyncio.timeout(2):
+            async with SwapTransport(pending.prepared) as transport:
+                receipt = await transport.lookup()
+        if receipt is None:
+            return True
+        store.resolve_uncertain_execution(
+            pending.run_id,
+            success=receipt.success,
+            error=receipt.message,
+            now=datetime.now(UTC),
+        )
+        return False
+    except Exception:
+        # Failure to read this rule's receipt must not block independent rules.
+        return True
+
+
+async def _lookup_receipt(transport):
+    try:
+        async with asyncio.timeout(2):
+            return await transport.lookup()
+    except Exception:
+        # The receipt index can fail independently of committed state queries.
+        # Only the nonce check may release the queue after a failed lookup.
+        return None

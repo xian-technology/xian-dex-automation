@@ -114,6 +114,11 @@ class AutomationStore:
 
     def _init_db(self) -> None:
         with self.connect() as connection:
+            connection.execute("""create table if not exists uncertain_executions (
+                run_id integer primary key references runs(id),
+                rpc_url text not null, chain_id text not null,
+                tx_json blob not null, tx_hash text not null
+            )""")
             connection.execute("""create table if not exists runtime_config (
                 slot integer primary key check (slot = 1), config_json text not null,
                 generation integer not null)""")
@@ -204,6 +209,10 @@ class AutomationStore:
             ).fetchone()
         if row is None:
             return None
+        return self._execution_from_row(row)
+
+    @staticmethod
+    def _execution_from_row(row) -> PendingExecution:
         transaction = prepare_transaction(row["tx_json"])
         if transaction.tx_hash != row["tx_hash"]:
             raise ValueError("persisted transaction hash mismatch")
@@ -215,6 +224,62 @@ class AutomationStore:
             row["reason"],
             json.loads(row["details_json"]),
         )
+
+    def uncertain_execution(self, rule_id: str) -> PendingExecution | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """select u.*, r.rule_id, r.reason, r.details_json, 1 as broadcast_attempted
+                    from uncertain_executions u join runs r on r.id = u.run_id
+                    where r.rule_id = ?""", (rule_id,),
+            ).fetchone()
+        return None if row is None else self._execution_from_row(row)
+
+    def release_consumed_execution(self, run_id: int) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """select p.*, r.rule_id, r.reason, r.details_json
+                    from pending_execution p join runs r on r.id = p.run_id
+                    where p.run_id = ?""", (run_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("no matching active execution")
+            connection.execute(
+                """insert into uncertain_executions (run_id, rpc_url, chain_id, tx_json, tx_hash)
+                    select run_id, rpc_url, chain_id, tx_json, tx_hash
+                    from pending_execution where run_id = ?""", (run_id,),
+            )
+            details = json.loads(row["details_json"])
+            details.pop("recovery_error", None)
+            details["nonce_consumed"] = True
+            result = dict(rule_id=row["rule_id"], tx_hash=row["tx_hash"], details=details,
+                          status="outcome_unknown", reason="nonce_consumed_receipt_missing")
+            connection.execute(
+                "update runs set status = ?, reason = ?, details_json = ? where id = ?",
+                (result["status"], result["reason"], json.dumps(details), run_id),
+            )
+            connection.execute("delete from pending_execution where run_id = ?", (run_id,))
+        return result
+
+    def resolve_uncertain_execution(self, run_id: int, *, success: bool, error: str | None,
+                                    now: datetime) -> None:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """select r.* from uncertain_executions u join runs r on r.id = u.run_id
+                    where u.run_id = ?""", (run_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("no matching uncertain execution")
+            result = self._execution_result(row, success, error)
+            connection.execute(
+                "update runs set status = ?, reason = ?, details_json = ? where id = ?",
+                (result["status"], "receipt_recovered", json.dumps(result["details"]), run_id),
+            )
+            # Independent trades/configuration may have changed this market.
+            # Start from a fresh baseline even when the old trade reverted.
+            self._save_rule_state(connection, row["rule_id"], RuleRuntimeState(last_action_at=now))
+            connection.execute("delete from uncertain_executions where run_id = ?", (run_id,))
 
     def mark_broadcast_attempted(self, run_id: int) -> None:
         with self.connect() as connection:

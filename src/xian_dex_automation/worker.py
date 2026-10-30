@@ -9,7 +9,7 @@ from typing import Any
 
 from .config import AutomationConfig, RuleConfig
 from .dex import BPS, DexClient, PairSnapshot
-from .execution import reconcile_execution
+from .execution import reconcile_execution, reconcile_uncertain_rule
 from .rules import RuleRuntimeState, evaluate_price_move
 from .storage import AutomationStore
 
@@ -184,6 +184,8 @@ class AutomationWorker:
         rule: RuleConfig,
         snapshot: PairSnapshot,
     ) -> dict[str, Any]:
+        if await reconcile_uncertain_rule(self.store, rule.id):
+            return {"rule_id": rule.id, "status": "skipped", "reason": "rule_outcome_unknown"}
         now = datetime.now(UTC)
         state = self.store.get_rule_state(rule.id)
         decision = evaluate_price_move(

@@ -104,7 +104,8 @@ deployment and localnet exercise commands.
 
 The worker journals the exact signed transaction in SQLite before broadcasting.
 API evaluations and event workers using the same database on one host share an
-execution lock. Only one swap may be unresolved at a time, across all rules.
+execution lock. Only one potentially executable swap may be pending at a time,
+across all rules.
 Concurrent manual evaluations return `execution_busy`; event processing waits
 before advancing its cursor.
 
@@ -112,20 +113,37 @@ On startup and at each polling interval, recovery checks the saved transaction
 hash on its original RPC and chain. When execution is enabled, it may rebroadcast
 the same signed bytes, nonce, and deadline. It never signs a replacement for an
 unresolved transaction. Recovery works even if the rule was removed or the
-signing key is unavailable. With `wallet.execute: false`, recovery only checks
-receipts and does not broadcast.
+signing key is unavailable. With `wallet.execute: false`, recovery only reads
+receipts and committed nonce state and does not broadcast.
 
 `GET /runs` exposes the existing run as `pending`, including its hash and any
 `details.recovery_error`. Confirmed success atomically records the run, updates
 the baseline, and starts cooldown at reconciliation time. Confirmed failure or a
 definitive rejection of the first broadcast records failure without advancing
-rule state. A timeout, missing receipt, or rejection after an uncertain earlier
-broadcast leaves the run pending and blocks new trades.
+rule state. When an attempted transaction has no readable receipt, recovery reads
+its signer's committed nonce on the original chain. The mempool's next nonce is
+not evidence of commitment. If the saved nonce is consumed, the run becomes
+`outcome_unknown` (`nonce_consumed_receipt_missing`), its signed transaction is
+retained, and the shared execution queue is released without rebroadcasting it.
+Only that rule is held (`rule_outcome_unknown`); independent rules can trade from
+fresh market state and transaction simulation, using the same wallet.
+
+The held rule survives restarts and configuration changes. Each evaluation checks
+for its original receipt with a bounded lookup. If the receipt becomes available,
+the existing run records success or failure, the hold is removed, and the rule
+initializes a fresh baseline with cooldown starting at reconciliation. It does
+not replay the old decision, including when the recovered receipt reports a
+revert. Until then that rule remains held; do not rename or recreate it to bypass
+the hold. A missing receipt alone never counts as success or failure.
+
+If the nonce is unconsumed, or committed state cannot be verified, recovery keeps
+the shared queue pending. It may rebroadcast only the original signed bytes when
+execution is enabled.
 
 If recovery cannot establish an outcome, restore access to the original RPC and
 its transaction history. Do not delete the journal or reset the database to
 resume trading: the original transaction may already have executed. A pruned
-receipt or expired transaction can require operator investigation; expiry alone
+receipt can leave the affected rule held; expiry alone
 does not prove it never executed. Pre-upgrade submissions without a journal
 cannot be recovered automatically.
 
@@ -140,8 +158,9 @@ database, including its execution journal, as one consistent SQLite snapshot.
 The pause covers this automation database and its dedicated signer. It does not
 lock the DEX, other wallets, or other independent automation accounts. A confirmed
 failed transaction releases the queue, allowing a follow-up evaluation. If no
-node can establish the original outcome, automation can remain paused indefinitely;
-there is no timeout-based assumption of failure or unsafe force-clear operation.
+node can establish either the receipt or nonce consumption, the shared queue can
+remain paused. A consumed nonce with a missing receipt holds only its rule. There
+is no timeout-based assumption of failure or unsafe force-clear operation.
 
 ### Live Configuration Changes
 
@@ -162,7 +181,7 @@ does not prove the change was cancelled: read `/config.yaml` and `/health` again
 For an unavailable original RPC, submit the desired configuration with a healthy
 replacement RPC on the **same chain**. Drain recovery can look up/rebroadcast the
 saved transaction there, checking its original chain and hash. It falls back to
-the original RPC if needed. A request to disable execution only reads receipts
+the original RPC if needed. A request to disable execution only reads receipts and committed nonce state
 during the drain. An explicit chain change finishes recovery on the original
 chain before applying the new settings.
 
@@ -332,7 +351,10 @@ The stack's mandatory `07-dex-automation-recovery` phase runs
 It checks concurrent evaluation, process death after broadcast, recovery through
 another validator during a config change, an on-chain revert followed by a
 successful swap, and an unrelated wallet transacting while automation is pending.
-Receipts and token balances must agree on all five nodes; successful swaps must
+It also hides receipts for both a successful and a reverted swap, verifies
+independent trades from the same wallet, prevents the original decision from
+repeating across worker recreation and RPC reload, and restores receipts to verify
+safe rule resumption. Receipts and token balances must agree on all five nodes; successful swaps must
 consume exactly one nonce and one input debit. The harness uses dedicated funded
 test wallets and deletes its temporary private-input file.
 

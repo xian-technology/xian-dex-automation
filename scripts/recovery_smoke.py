@@ -15,6 +15,7 @@ import sys
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 from xian_py import XianAsync
@@ -22,6 +23,7 @@ from xian_py import transaction as tr
 from xian_py.wallet import Wallet
 
 from xian_dex_automation.config import AutomationConfig, render_config, save_config
+from xian_dex_automation.configuration import ConfigurationManager
 from xian_dex_automation.dex import DexClient
 from xian_dex_automation.rules import RuleRuntimeState
 from xian_dex_automation.service import create_app
@@ -235,20 +237,27 @@ async def crash_and_reload(settings, config, store, settings_path):
     return target, pending.prepared.transaction.tx_hash, unrelated_hash
 
 
-async def reverted_then_followup(config, store):
-    await arm_rule(config, store)
-    state = store.get_rule_state(config.rules[0].id)
-    before = await balance_and_nonce(config)
+async def prepare_probe(config, *, revert):
     async with DexClient(config) as dex:
         snapshot = await dex.get_pair_snapshot(config.rules[0].trigger.pair_id)
         prepared = await dex.prepare_swap(
             snapshot, config.rules[0].action, amount_out_min=Decimal("0")
         )
-        payload = json.loads(prepared.transaction.json_bytes)["payload"]
-        payload["kwargs"]["amountOutMin"] = {"__fixed__": "1000000000000"}
-        rejected = replace(
-            prepared, transaction=tr.prepare_transaction(tr.create_tx(payload, dex.client.wallet))
-        )
+        if revert:
+            payload = json.loads(prepared.transaction.json_bytes)["payload"]
+            payload["kwargs"]["amountOutMin"] = {"__fixed__": "1000000000000"}
+            prepared = replace(
+                prepared,
+                transaction=tr.prepare_transaction(tr.create_tx(payload, dex.client.wallet)),
+            )
+    return snapshot, prepared
+
+
+async def reverted_then_followup(config, store):
+    await arm_rule(config, store)
+    state = store.get_rule_state(config.rules[0].id)
+    before = await balance_and_nonce(config)
+    snapshot, rejected = await prepare_probe(config, revert=True)
     with store.execution_lock() as claimed:
         require(claimed, "test execution is busy")
         pending = store.begin_execution(
@@ -275,6 +284,91 @@ async def reverted_then_followup(config, store):
     return rejected.transaction.tx_hash, followup["tx_hash"]
 
 
+async def missing_receipt_then_independent(settings, config, store, *, success):
+    target = config.model_copy(deep=True)
+    original = target.rules[0]
+    original.id = f"missing-receipt-{success}"
+    independent = original.model_copy(deep=True)
+    independent.id = f"independent-{success}"
+    target.rules = [original, independent]
+    await ConfigurationManager(AutomationWorker(config, store)).update(target, lambda: None)
+    await arm_rule(target, store)
+    snapshot, prepared = await prepare_probe(target, revert=not success)
+    with store.execution_lock() as claimed:
+        require(claimed, "test execution is busy")
+        pending = store.begin_execution(
+            rule_id=original.id,
+            prepared=prepared,
+            next_baseline_price=snapshot.price_token1_per_token0,
+            reason="e2e_missing_receipt",
+            details={},
+        )
+        store.mark_broadcast_attempted(pending.run_id)
+        async with SwapTransport(prepared) as transport:
+            require(await transport.broadcast() is None, "missing receipt probe rejected")
+    # The test oracle knows the result on all validators. Hide ONLY this hash's
+    # receipt from automation, leaving real committed-state reads and signing.
+    await verify_nodes(settings, prepared.transaction.tx_hash, success)
+    before = await balance_and_nonce(target)
+    run_count = len(store.list_runs())
+
+    class HiddenReceiptTransport(SwapTransport):
+        async def lookup(self):
+            if self.prepared.transaction.tx_hash == prepared.transaction.tx_hash:
+                return None
+            return await super().lookup()
+
+        async def broadcast(self):
+            require(
+                self.prepared.transaction.tx_hash != prepared.transaction.tx_hash,
+                "consumed transaction was rebroadcast",
+            )
+            return await super().broadcast()
+
+    with patch("xian_dex_automation.execution.SwapTransport", HiddenReceiptTransport):
+        worker = AutomationWorker(target, store)
+        result = await worker.recover_once()
+        require(result["status"] == "outcome_unknown", "consumed nonce did not release queue")
+        require(store.pending_execution() is None, "consumed nonce retained shared queue")
+        store.save_rule_state(
+            independent.id,
+            RuleRuntimeState(
+                baseline_price=snapshot.price_token1_per_token0 / 2,
+            ),
+        )
+        for attempt in range(3):
+            # Reopen SQLite and recreate the worker to test durable suppression.
+            worker = AutomationWorker(target, AutomationStore(store.path))
+            results = await worker.evaluate_pair_once(original.trigger.pair_id)
+            require(results[0]["reason"] == "rule_outcome_unknown", "original decision repeated")
+            if attempt == 0:
+                followup = await settle(worker)
+                require(followup["status"] == "submitted", "independent rule was blocked")
+                await assert_one_swap(target, before)
+                changed = target.model_copy(deep=True)
+                changed.network.rpc_url = settings["rpc_urls"][2]
+                await ConfigurationManager(worker).update(changed, lambda: None)
+                target = changed
+        require(len(store.list_runs()) == run_count + 1, "missing receipt repeated a decision")
+        await assert_one_swap(target, before)
+        require(store.uncertain_execution(original.id) is not None, "unknown outcome lost")
+
+    # Restore receipt visibility: success AND revert must rebaseline the held
+    # rule without resubmitting its old decision or changing the run count.
+    worker = AutomationWorker(target, store)
+    results = await worker.evaluate_pair_once(original.trigger.pair_id)
+    require(results[0]["reason"] == "baseline_initialized", "receipt recovery replayed decision")
+    require(store.uncertain_execution(original.id) is None, "restored receipt did not release rule")
+    require(len(store.list_runs()) == run_count + 1, "receipt restoration created another trade")
+    await assert_one_swap(target, before)
+    await verify_nodes(settings, followup["tx_hash"], True)
+    return target, {
+        "original": prepared.transaction.tx_hash,
+        "independent": followup["tx_hash"],
+        "original_success": success,
+    }
+
+
 async def run(settings, settings_path):
     require(len(settings["rpc_urls"]) == 5, "recovery phase requires five validators")
     config = make_config(settings)
@@ -299,7 +393,13 @@ async def run(settings, settings_path):
     reverted_hash, followup_hash = await reverted_then_followup(config, store)
     await verify_nodes(settings, reverted_hash, False)
     await verify_nodes(settings, followup_hash, True)
-    require(len(store.list_runs()) == 4, "recovery duplicated run records")
+    missing_receipts = []
+    for success in (True, False):
+        config, result = await missing_receipt_then_independent(
+            settings, config, store, success=success
+        )
+        missing_receipts.append(result)
+    require(len(store.list_runs()) == 8, "recovery duplicated run records")
     return {
         "ok": True,
         "nodes_verified": 5,
@@ -308,6 +408,7 @@ async def run(settings, settings_path):
         "reverted_swap": reverted_hash,
         "followup_swap": followup_hash,
         "unrelated_wallet_transfer": unrelated_hash,
+        "consumed_nonce_missing_receipts": missing_receipts,
         "runs": len(store.list_runs()),
         "active_rpc": config.network.rpc_url,
     }
