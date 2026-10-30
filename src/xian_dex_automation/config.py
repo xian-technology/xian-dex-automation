@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Self
@@ -221,4 +223,17 @@ def render_config(config: AutomationConfig) -> str:
 def save_config(config: AutomationConfig, path: str | Path) -> None:
     config_path = Path(path).resolve()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(render_config(config), encoding="utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=config_path.parent,
+            prefix=f".{config_path.name}.", delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(render_config(config))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, config_path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)

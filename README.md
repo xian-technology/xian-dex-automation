@@ -137,11 +137,41 @@ is running. Database path changes through the API return HTTP 409: stop all
 workers and API processes before migrating the existing database. Back up the
 database, including its execution journal, as one consistent SQLite snapshot.
 
-Restart workers after changing network, custody, or signing settings; the live
-configuration endpoints do not recreate an existing worker's RPC client or
-signer. Event delivery remains replayable after a crash; configure baseline
-reset and cooldown to match the intended strategy, rather than relying on
-exactly-once event delivery.
+The pause covers this automation database and its dedicated signer. It does not
+lock the DEX, other wallets, or other independent automation accounts. A confirmed
+failed transaction releases the queue, allowing a follow-up evaluation. If no
+node can establish the original outcome, automation can remain paused indefinitely;
+there is no timeout-based assumption of failure or unsafe force-clear operation.
+
+### Live Configuration Changes
+
+API configuration and key changes automatically drain and restart workers. A
+shared configuration gate blocks new evaluations while the current evaluation
+finishes and any pending transaction is reconciled. The configuration is then
+published with a new revision in SQLite. Embedded and standalone workers sharing
+that database close their old watcher and recreate the RPC client and signer,
+even on a quiet chain. Key replacement also advances the revision when its file
+path is unchanged; execution is disabled before the key file is replaced.
+
+`GET /health` reports `configuration_status` as `draining`, `restarting`, or
+`active` for the embedded worker, plus `worker_error` on startup/runtime failure.
+A failed worker retries with the active settings. Configuration requests wait
+while recovery is unresolved; competing writes return HTTP 409. A client timeout
+does not prove the change was cancelled: read `/config.yaml` and `/health` again.
+
+For an unavailable original RPC, submit the desired configuration with a healthy
+replacement RPC on the **same chain**. Drain recovery can look up/rebroadcast the
+saved transaction there, checking its original chain and hash. It falls back to
+the original RPC if needed. A request to disable execution only reads receipts
+during the drain. An explicit chain change finishes recovery on the original
+chain before applying the new settings.
+
+Changing RPC, chain, or DEX contracts resets event cursors and price baselines;
+changing a rule's pair resets that rule's baseline. Cooldown timestamps are kept.
+Other rule edits retain their existing market baseline. Local file/environment
+edits require restarting the affected processes; API changes are shared through
+the database. Do not remove either `.execution.lock` or `.configuration.lock`
+while any process is running. Event delivery remains replayable after a crash.
 
 ### Stack-Managed Sidecar
 
@@ -296,6 +326,15 @@ Full localnet strategy-vault deployment and a keeper-triggered swap:
 ```bash
 uv run --extra dev python scripts/bootstrap_strategy_vault.py --execute --execute-swap
 ```
+
+The stack's mandatory `07-dex-automation-recovery` phase runs
+`scripts/recovery_smoke.py` against the canonical DEX bundle on five validators.
+It checks concurrent evaluation, process death after broadcast, recovery through
+another validator during a config change, an on-chain revert followed by a
+successful swap, and an unrelated wallet transacting while automation is pending.
+Receipts and token balances must agree on all five nodes; successful swaps must
+consume exactly one nonce and one input debit. The harness uses dedicated funded
+test wallets and deletes its temporary private-input file.
 
 GitHub Actions runs lint, unit / frontend tests, and compile checks on
 pushes and pull requests to `main`. The live-node test is skipped in CI

@@ -45,9 +45,35 @@ Busy or deferred event evaluations retry before cursor advancement, and cursor
 writes cannot move backward. Event delivery itself is not exactly-once.
 
 This coordination is local to one database on one host. Runtime database
-switches are rejected by the API so they cannot strand a journal. Other live
-configuration changes still require an operator restart to recreate the worker's
-RPC client and signer; the journal always retains the original submission network.
+switches are rejected by the API so they cannot strand a journal.
+
+### Configuration Drain and Restart
+
+`configuration.ConfigurationManager` closes admission using an exclusive
+`.configuration.lock`, then waits for `.execution.lock`. Evaluations acquire
+the admission lock briefly in shared mode to claim execution, releasing it before
+async work. Thus an in-flight evaluation can finish while further evaluations
+are blocked, including those in other processes.
+
+The manager reconciles pending execution under the execution lock before saving
+the configuration. A proposed RPC can be used for recovery only with the original
+chain and signed bytes; the original endpoint remains the fallback. Disabling
+execution suppresses broadcasts during drain. Cancellation before publication
+leaves the active configuration intact and releases the OS locks.
+
+SQLite stores the active configuration and an incrementing revision, without key
+material. Every worker rejects evaluation with a stale revision. Its supervisor
+detects revisions without depending on DEX events, closes the old watcher/client,
+and creates the next one. The revision changes on key replacement even if the
+configuration text is identical. Execution-disabled settings are persisted before
+key replacement, so an interrupted or failed key write cannot enable the new key.
+
+Configuration publication and market-state resets share a SQLite transaction.
+RPC/chain/DEX changes clear cursors and baselines; changed rule pairs clear only
+their baselines. Existing cooldown timestamps remain. Old watchers cannot write
+a cursor after a revision change. CLI/API startup reconciles local configuration
+with stored runtime settings before admitting new work. Local file edits still
+need a process restart; API writes propagate to every worker sharing the database.
 
 ## API
 

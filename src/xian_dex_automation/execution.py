@@ -1,17 +1,23 @@
 """Recover a journaled swap under the database's execution lock."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from .storage import AutomationStore
 from .submission import PendingExecution, SwapTransport
 
 
-async def reconcile_execution(store: AutomationStore, *, allow_broadcast: bool):
+async def reconcile_execution(store: AutomationStore, *, allow_broadcast: bool, rpc_url: str | None = None):
     pending = store.pending_execution()
     if pending is None:
         return None
+    prepared = pending.prepared
+    if rpc_url is not None:
+        # Only the endpoint changes. Transport still verifies the ORIGINAL
+        # chain and hash before lookup or rebroadcast; never re-sign here.
+        prepared = replace(prepared, rpc_url=rpc_url)
     try:
-        async with SwapTransport(pending.prepared) as transport:
+        async with SwapTransport(prepared) as transport:
             return await _reconcile(store, pending, transport, allow_broadcast)
     except Exception as exc:
         # Cancellation/process exit must propagate, leaving the durable claim.

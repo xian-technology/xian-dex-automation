@@ -59,6 +59,10 @@ async def run_worker(config_path: str) -> None:
     config = load_config(config_path)
     store = AutomationStore(config.database_path)
     worker = AutomationWorker(config, store)
+    from .configuration import ConfigurationManager
+
+    if store.active_config(config) != config:
+        await ConfigurationManager(worker).update(config, lambda: None)
     await worker.run_forever()
 
 

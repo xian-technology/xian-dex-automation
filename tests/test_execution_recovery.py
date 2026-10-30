@@ -76,6 +76,36 @@ def test_watcher_retries_event_before_advancing_cursor(tmp_path, monkeypatch, bl
     assert calls == 2
 
 
+def test_old_watcher_cannot_restore_cursor_after_configuration_reload(tmp_path, monkeypatch):
+    from xian_dex_automation.worker import ConfigurationChanged
+
+    worker, store, _ = make_worker(tmp_path, execute=False)
+
+    class Events:
+        async def watch(self, **kwargs):
+            yield SimpleNamespace(id=42, data={"pair": 1})
+
+    class Client:
+        client = SimpleNamespace(events=lambda *args: Events())
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    async def finish_then_reload(*args):
+        target = worker.config.model_copy(deep=True)
+        target.network.rpc_url = "http://127.0.0.1:26658"
+        store.save_active_config(target, previous=worker.config)
+
+    monkeypatch.setattr("xian_dex_automation.worker.DexClient", lambda config: Client())
+    monkeypatch.setattr(worker, "_evaluate_event_pair", finish_then_reload)
+    with pytest.raises(ConfigurationChanged):
+        asyncio.run(worker._watch_events())
+    assert store.get_cursor("con_pairs:Sync") is None
+
+
 def test_event_waits_for_its_pending_swap_without_evaluating_again(tmp_path, monkeypatch):
     worker, _, _ = make_worker(tmp_path, execute=True)
     worker.config.network.poll_interval_seconds = 0.001

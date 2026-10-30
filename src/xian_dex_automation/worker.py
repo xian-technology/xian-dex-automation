@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -20,15 +21,50 @@ def _decimal_details(value: Decimal | None) -> str | None:
 
 
 def _execution_blocked(result: dict[str, Any]) -> bool:
-    return result["status"] == "pending" or result["reason"] == "execution_busy"
+    return result["status"] == "pending" or result["reason"] in {
+        "execution_busy", "configuration_draining",
+    }
+
+
+class ConfigurationChanged(Exception):
+    """Internal signal to close the old watcher and recreate its client."""
 
 
 class AutomationWorker:
     def __init__(self, config: AutomationConfig, store: AutomationStore):
         self.config = config
         self.store = store
+        self.config_generation = store.config_generation()
+        self.last_error: str | None = None
 
     async def run_forever(self) -> None:
+        while True:
+            self.config = self.store.active_config(self.config)
+            self.config_generation = self.store.config_generation()
+            try:
+                async with asyncio.TaskGroup() as tasks:
+                    tasks.create_task(self._run_configuration())
+                    tasks.create_task(self._watch_configuration())
+            except* ConfigurationChanged:
+                pass
+            except* Exception:
+                self.last_error = "worker could not start or continue; check service logs"
+                logger.exception("automation worker failed; retrying with active configuration")
+                await asyncio.sleep(1)
+
+    async def _watch_configuration(self) -> None:
+        while True:
+            await asyncio.sleep(0.1)
+            if self._configuration_changed():
+                raise ConfigurationChanged()
+
+    def _configuration_changed(self) -> bool:
+        return (
+            self.store.config_generation() != self.config_generation
+            or self.store.active_config(self.config) != self.config
+        )
+
+    async def _run_configuration(self) -> None:
         # Recovery needs the persisted network and bytes, never a signing key.
         while self.store.pending_execution() is not None:
             await self.recover_once()
@@ -47,12 +83,23 @@ class AutomationWorker:
         with store.execution_lock() as claimed:
             if not claimed:
                 return {"status": "skipped", "reason": "execution_busy"}
-            return await reconcile_execution(store, allow_broadcast=self.config.wallet.execute)
+            config = store.active_config(self.config)
+            # A drain owns recovery policy (including disabling broadcasts).
+            with store.configuration_lock(shared=True) as admitted:
+                if not admitted:
+                    return {"status": "skipped", "reason": "configuration_draining"}
+            return await reconcile_execution(store, allow_broadcast=config.wallet.execute)
 
     async def _watch_events(self) -> None:
         cursor_name = f"{self.config.dex.pairs_contract}:Sync"
         cursor = self.store.get_cursor(cursor_name)
-        async with DexClient(self.config) as dex:
+        async with AsyncExitStack() as clients:
+            with self.store.configuration_lock(shared=True) as admitted:
+                if not admitted or self._configuration_changed():
+                    await asyncio.sleep(0.05)
+                    raise ConfigurationChanged()
+                dex = await clients.enter_async_context(DexClient(self.config))
+                self.last_error = None
             event_client = dex.client.events(
                 self.config.dex.pairs_contract,
                 "Sync",
@@ -65,6 +112,8 @@ class AutomationWorker:
             async for event in event_client.watch(after_id=cursor):
                 for pair_id in self._pair_ids_from_event(event):
                     await self._evaluate_event_pair(dex, pair_id)
+                if self._configuration_changed():
+                    raise ConfigurationChanged()
                 if event.id is not None:
                     self.store.save_cursor(cursor_name, int(event.id))
                     cursor = int(event.id)
@@ -72,6 +121,8 @@ class AutomationWorker:
     async def _evaluate_event_pair(self, dex: DexClient, pair_id: int) -> None:
         while True:
             results = await self.evaluate_pair(dex, pair_id)
+            if any(result["reason"] == "configuration_changed" for result in results):
+                raise ConfigurationChanged()
             if any(result["reason"] == "submission_pending" for result in results):
                 # This event already created a durable submission. Reconcile it,
                 # without evaluating the same event into another signed swap.
@@ -92,8 +143,9 @@ class AutomationWorker:
         recovered = await self.recover_once()
         if recovered is not None:
             return [recovered]
-        async with DexClient(self.config) as dex:
-            return await self.evaluate_pair(dex, pair_id)
+        evaluator = AutomationWorker(self.store.active_config(self.config), self.store)
+        async with DexClient(evaluator.config) as dex:
+            return await evaluator.evaluate_pair(dex, pair_id)
 
     async def evaluate_pair(
         self,
@@ -101,9 +153,11 @@ class AutomationWorker:
         pair_id: int,
     ) -> list[dict[str, Any]]:
         store = self.store
-        with store.execution_lock() as claimed:
-            if not claimed:
-                return [{"status": "skipped", "reason": "execution_busy", "pair_id": pair_id}]
+        with store.evaluation_lock() as blocked:
+            if blocked is not None:
+                return [{"status": "skipped", "reason": blocked, "pair_id": pair_id}]
+            if self._configuration_changed():
+                return [{"status": "skipped", "reason": "configuration_changed", "pair_id": pair_id}]
             # Bind this evaluation to one configuration and database even if
             # the admin API replaces the worker's settings while we await RPC.
             evaluator = AutomationWorker(self.config.model_copy(deep=True), store)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import sqlite3
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -11,6 +11,7 @@ from typing import Any
 
 from xian_py.transaction import prepare_transaction
 
+from .config import AutomationConfig
 from .rules import RuleRuntimeState
 from .submission import PendingExecution, PreparedSwap
 
@@ -31,16 +32,23 @@ class AutomationStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    @contextmanager
     def execution_lock(self):
         """One evaluator per local database, including other service processes.
 
         Keep the lock file: unlinking it could create two lock authorities.
         The kernel releases the claim on process exit; the journal survives.
         """
-        with self.path.with_suffix(self.path.suffix + ".execution.lock").open("a") as lock:
+        return self._file_lock("execution", shared=False)
+
+    def configuration_lock(self, *, shared: bool = False):
+        return self._file_lock("configuration", shared=shared)
+
+    @contextmanager
+    def _file_lock(self, name: str, *, shared: bool):
+        with self.path.with_suffix(self.path.suffix + f".{name}.lock").open("a") as lock:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+                fcntl.flock(lock, mode | fcntl.LOCK_NB)
             except BlockingIOError:
                 yield False
                 return
@@ -49,6 +57,56 @@ class AutomationStore:
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
+    @contextmanager
+    def evaluation_lock(self):
+        # Release the short admission lock before doing any async work. A
+        # configuration writer can then close admission while an evaluation
+        # finishes under the execution lock, without starving behind readers.
+        with ExitStack() as execution:
+            with self.configuration_lock(shared=True) as admitted:
+                reason = "configuration_draining"
+                if admitted:
+                    acquired = execution.enter_context(self.execution_lock())
+                    reason = None if acquired else "execution_busy"
+            yield reason
+
+    def active_config(self, default: AutomationConfig) -> AutomationConfig:
+        with self.connect() as connection:
+            row = connection.execute("select config_json from runtime_config where slot = 1").fetchone()
+        return default if row is None else AutomationConfig.model_validate_json(row["config_json"])
+
+    def save_active_config(self, config: AutomationConfig, *, previous: AutomationConfig) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """insert into runtime_config (slot, config_json, generation) values (1, ?, 1)
+                    on conflict(slot) do update set config_json = excluded.config_json,
+                        generation = runtime_config.generation + 1""",
+                (config.model_dump_json(),),
+            )
+            self._reset_changed_markets(connection, previous, config)
+
+    @staticmethod
+    def _reset_changed_markets(connection, previous, target):
+        market_changed = (
+            previous.network.rpc_url != target.network.rpc_url
+            or previous.network.chain_id != target.network.chain_id
+            or previous.dex != target.dex
+        )
+        if market_changed:
+            connection.execute("update rule_state set baseline_price = null")
+            connection.execute("delete from cursors")
+            return
+        previous_pairs = {rule.id: rule.trigger.pair_id for rule in previous.rules}
+        target_pairs = {rule.id: rule.trigger.pair_id for rule in target.rules}
+        for rule_id in previous_pairs.keys() | target_pairs.keys():
+            if previous_pairs.get(rule_id) != target_pairs.get(rule_id):
+                connection.execute("update rule_state set baseline_price = null where rule_id = ?", (rule_id,))
+
+    def config_generation(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute("select generation from runtime_config where slot = 1").fetchone()
+        return 0 if row is None else row["generation"]
+
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row
@@ -56,6 +114,9 @@ class AutomationStore:
 
     def _init_db(self) -> None:
         with self.connect() as connection:
+            connection.execute("""create table if not exists runtime_config (
+                slot integer primary key check (slot = 1), config_json text not null,
+                generation integer not null)""")
             connection.execute(
                 """
                 create table if not exists rule_state (

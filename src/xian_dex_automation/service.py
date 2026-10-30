@@ -19,6 +19,7 @@ from .config import (
     render_config,
     save_config,
 )
+from .configuration import ConfigurationBusy, ConfigurationManager
 from .dex import resolve_private_key, resolve_private_key_source
 from .storage import AutomationStore
 from .worker import AutomationWorker
@@ -451,6 +452,9 @@ def _index_html() -> str:
     const refresh = async () => {
       const health = await api("/health", { skipAuth: true });
       $("mode").textContent = health.execute_enabled ? "execute" : "dry-run";
+      if (health.configuration_status !== "active") {
+        $("mode").textContent += ` (${health.configuration_status})`;
+      }
       $("mode").className = health.execute_enabled ? "dangerText" : "ok";
       $("ruleCount").textContent = health.rules;
       $("custodyMode").textContent = health.custody_mode;
@@ -637,6 +641,8 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if app.state.store.active_config(config) != config:
+            await app.state.configuration_manager.update(config, lambda: None)
         if start_worker:
             app.state.worker_task = asyncio.create_task(
                 app.state.worker.run_forever()
@@ -666,11 +672,12 @@ def create_app(
     app.state.worker = AutomationWorker(config, app.state.store)
     app.state.worker_task = None
 
-    def apply_config(new_config: AutomationConfig) -> None:
-        app.state.config = new_config
-        app.state.worker.config = new_config
+    app.state.configuration_manager = ConfigurationManager(app.state.worker)
 
-    def persist_config(new_config: AutomationConfig) -> None:
+    def current_config() -> AutomationConfig:
+        return app.state.store.active_config(app.state.config)
+
+    async def persist_config(new_config: AutomationConfig, *, after_commit=None) -> None:
         if app.state.config_path is None:
             raise HTTPException(
                 status_code=409,
@@ -695,8 +702,16 @@ def create_app(
                         "custody.strategy_vault.keeper_address"
                     ),
                 )
-        save_config(new_config, app.state.config_path)
-        apply_config(new_config)
+        try:
+            await app.state.configuration_manager.update(
+                new_config,
+                lambda: save_config(new_config, app.state.config_path),
+                after_commit=after_commit,
+            )
+        except ConfigurationBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            app.state.config = current_config()
 
     def normalized_for_persist(
         new_config: AutomationConfig,
@@ -744,7 +759,7 @@ def create_app(
         return app.state.config_path.parent / "wallet.key"
 
     def wallet_payload() -> dict[str, Any]:
-        current = app.state.config
+        current = current_config()
         private_key = resolve_private_key(current)
         private_key_source = (
             resolve_private_key_source(current) if private_key else None
@@ -771,7 +786,7 @@ def create_app(
             ),
         }
 
-    def persist_wallet_key(
+    async def persist_wallet_key(
         private_key: str, *, overwrite: bool
     ) -> dict[str, Any]:
         if app.state.config_path is None:
@@ -779,17 +794,20 @@ def create_app(
                 status_code=409,
                 detail="wallet key writes require a config path",
             )
-        current = app.state.config
+        current = current_config()
         path = wallet_key_path(current)
-        _write_private_key_file(path, private_key, overwrite=overwrite)
-
+        if path.exists() and not overwrite:
+            raise HTTPException(status_code=409, detail="wallet key file already exists")
         wallet_update = current.wallet.model_dump()
         if os.environ.get(current.wallet.private_key_file_env) is None:
             wallet_update["private_key_file"] = path
         wallet_update["execute"] = False
         new_wallet = WalletConfig.model_validate(wallet_update)
         new_config = validated_update(current, wallet=new_wallet)
-        persist_config(new_config)
+        await persist_config(
+            new_config,
+            after_commit=lambda: _write_private_key_file(path, private_key, overwrite=overwrite),
+        )
         return wallet_payload()
 
     @app.get("/", response_class=HTMLResponse)
@@ -798,9 +816,15 @@ def create_app(
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        current = app.state.config
+        current = current_config()
+        with app.state.store.configuration_lock(shared=True) as admitted:
+            configuration_status = "active" if admitted else "draining"
+        if admitted and app.state.worker_task is not None and app.state.worker.config_generation != app.state.store.config_generation():
+            configuration_status = "restarting"
         return {
-            "status": "ok",
+            "status": "degraded" if app.state.worker.last_error else "ok",
+            "configuration_status": configuration_status,
+            "worker_error": app.state.worker.last_error,
             "execute_enabled": current.wallet.execute,
             "custody_mode": current.custody.mode,
             "rules": len(current.rules),
@@ -810,13 +834,13 @@ def create_app(
     async def custody(
         _admin: None = Depends(_require_admin_token),
     ) -> dict[str, Any]:
-        return app.state.config.custody.model_dump(mode="json")
+        return current_config().custody.model_dump(mode="json")
 
     @app.get("/rules")
     async def rules(
         _admin: None = Depends(_require_admin_token),
     ) -> list[dict[str, Any]]:
-        return [rule.model_dump(mode="json") for rule in app.state.config.rules]
+        return [rule.model_dump(mode="json") for rule in current_config().rules]
 
     @app.put("/rules/{rule_id}")
     async def upsert_rule(
@@ -829,14 +853,14 @@ def create_app(
                 status_code=400,
                 detail="rule id in path and body must match",
             )
-        current = app.state.config
+        current = current_config()
         rules_by_id = {item.id: item for item in current.rules}
         rules_by_id[rule_id] = rule
         new_config = validated_update(
             current,
             rules=list(rules_by_id.values()),
         )
-        persist_config(new_config)
+        await persist_config(new_config)
         return rule.model_dump(mode="json")
 
     @app.delete("/rules/{rule_id}")
@@ -844,12 +868,12 @@ def create_app(
         rule_id: str,
         _admin: None = Depends(_require_admin_token),
     ) -> dict[str, Any]:
-        current = app.state.config
+        current = current_config()
         rules = [rule for rule in current.rules if rule.id != rule_id]
         if len(rules) == len(current.rules):
             raise HTTPException(status_code=404, detail="rule not found")
         new_config = validated_update(current, rules=rules)
-        persist_config(new_config)
+        await persist_config(new_config)
         return {"deleted": rule_id}
 
     @app.get("/runs")
@@ -875,14 +899,14 @@ def create_app(
                 status_code=400,
                 detail="wallet private_key_file must be changed through config or environment",
             )
-        current = app.state.config
+        current = current_config()
         wallet_update = current.wallet.model_dump()
         for key in ("execute", "recipient"):
             if key in payload:
                 wallet_update[key] = payload[key]
         new_wallet = WalletConfig.model_validate(wallet_update)
         new_config = validated_update(current, wallet=new_wallet)
-        persist_config(new_config)
+        await persist_config(new_config)
         return wallet_payload()
 
     @app.post("/wallet/generate")
@@ -890,7 +914,7 @@ def create_app(
         payload: dict[str, Any],
         _admin: None = Depends(_require_admin_token),
     ) -> dict[str, Any]:
-        return persist_wallet_key(
+        return await persist_wallet_key(
             _generate_private_key(),
             overwrite=bool(payload.get("overwrite")),
         )
@@ -900,7 +924,7 @@ def create_app(
         payload: dict[str, Any],
         _admin: None = Depends(_require_admin_token),
     ) -> dict[str, Any]:
-        return persist_wallet_key(
+        return await persist_wallet_key(
             _validate_private_key(str(payload.get("private_key", ""))),
             overwrite=bool(payload.get("overwrite")),
         )
@@ -909,7 +933,7 @@ def create_app(
     async def get_config_yaml(
         _admin: None = Depends(_require_admin_token),
     ) -> str:
-        return render_config(app.state.config)
+        return render_config(current_config())
 
     @app.put("/config.yaml")
     async def put_config_yaml(
@@ -926,7 +950,7 @@ def create_app(
             new_config = parse_config_text(body, config_path=config_path_value)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if _wallet_key_source_changed(app.state.config, new_config):
+        if _wallet_key_source_changed(current_config(), new_config):
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -934,7 +958,7 @@ def create_app(
                     "config or environment, not the admin API"
                 ),
             )
-        persist_config(new_config)
+        await persist_config(new_config)
         return {"saved": True}
 
     @app.post("/evaluate/{pair_id}")
