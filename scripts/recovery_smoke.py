@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 from dataclasses import replace
 from decimal import Decimal
@@ -37,6 +38,24 @@ CRASH_EXIT = 73
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def require_submitted(run, message):
+    if run.get("status") == "submitted":
+        return
+    # Report the outcome, never the journal's signed transaction or other details.
+    details = run.get("details") or {}
+    fields = {
+        "status": run.get("status"),
+        "reason": run.get("reason"),
+        "error": details.get("error") or details.get("recovery_error"),
+    }
+    summary = {
+        key: re.sub(r"[0-9a-fA-F]{64,}", "<redacted-hex>", value)[:300]
+        for key, value in fields.items()
+        if isinstance(value, str)
+    }
+    raise RuntimeError(f"{message}: {json.dumps(summary, sort_keys=True)}")
 
 
 def make_config(settings):
@@ -279,7 +298,7 @@ async def reverted_then_followup(config, store):
     require(after[1] == before[1] + 1, "failed execution did not consume exactly one nonce")
     await worker.evaluate_pair_once(config.rules[0].trigger.pair_id)
     followup = await settle(worker)
-    require(followup["status"] == "submitted", "failure blocked follow-up swap")
+    require_submitted(followup, "follow-up swap did not submit")
     await assert_one_swap(config, after)
     return rejected.transaction.tx_hash, followup["tx_hash"]
 
@@ -343,7 +362,7 @@ async def missing_receipt_then_independent(settings, config, store, *, success):
             require(results[0]["reason"] == "rule_outcome_unknown", "original decision repeated")
             if attempt == 0:
                 followup = await settle(worker)
-                require(followup["status"] == "submitted", "independent rule was blocked")
+                require_submitted(followup, "independent rule did not submit")
                 await assert_one_swap(target, before)
                 changed = target.model_copy(deep=True)
                 changed.network.rpc_url = settings["rpc_urls"][2]
