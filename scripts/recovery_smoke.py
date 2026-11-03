@@ -121,27 +121,56 @@ async def balance_and_nonce(config):
 
 
 async def verify_nodes(settings, outcomes):
-    async def verify(url):
+    async def verify(node_index, url):
+        receipts = []
         async with XianAsync(url, chain_id=settings["chain_id"]) as client:
             for tx_hash, success in outcomes:
                 result = await client.wait_for_tx(tx_hash, timeout_seconds=30)
                 require(
                     result.tx_hash == tx_hash and result.success is success,
-                    "validators disagree on transaction outcome",
+                    "validators disagree on transaction outcome: "
+                    + json.dumps(
+                        {
+                            "node_index": node_index,
+                            "tx_hash": tx_hash,
+                            "hash_matches": result.tx_hash == tx_hash,
+                            "expected_success": success,
+                            "observed_success": result.success,
+                        },
+                        sort_keys=True,
+                    ),
                 )
+                receipts.append({"tx_hash": result.tx_hash, "success": result.success})
+        return receipts
 
-    async def balance(url):
+    async def balance(node_index, url, receipts):
         async with XianAsync(url, chain_id=settings["chain_id"]) as client:
+            before = await client.get_node_status()
             value = await client.get_state(
                 settings["token_in"], "balances", Wallet(settings["private_key"]).public_key
             )
-            return str(value)
+            after = await client.get_node_status()
+            return {
+                "node_index": node_index,
+                "height_before": before.latest_block_height,
+                "height_after": after.latest_block_height,
+                "balance": str(value),
+                "receipts": receipts,
+            }
 
     # No more probe trades are submitted during verification. Wait for the whole
     # submitted batch everywhere before comparing each validator's latest state.
-    await asyncio.gather(*(verify(url) for url in settings["rpc_urls"]))
-    balances = await asyncio.gather(*(balance(url) for url in settings["rpc_urls"]))
-    require(len(set(balances)) == 1, "validator token balances diverged")
+    receipts = await asyncio.gather(
+        *(verify(index, url) for index, url in enumerate(settings["rpc_urls"]))
+    )
+    observations = await asyncio.gather(
+        *(balance(index, url, receipts[index]) for index, url in enumerate(settings["rpc_urls"]))
+    )
+    require(
+        len({item["balance"] for item in observations}) == 1,
+        "validator token balances diverged: " + json.dumps(observations, sort_keys=True),
+    )
+    return observations
 
 
 async def assert_one_swap(config, before):
@@ -334,7 +363,7 @@ async def missing_receipt_then_independent(settings, config, store, *, success):
             require(await transport.broadcast() is None, "missing receipt probe rejected")
     # The test oracle knows the result on all validators. Hide ONLY this hash's
     # receipt from automation, leaving real committed-state reads and signing.
-    await verify_nodes(settings, [(prepared.transaction.tx_hash, success)])
+    original_nodes = await verify_nodes(settings, [(prepared.transaction.tx_hash, success)])
     before = await balance_and_nonce(target)
     run_count = len(store.list_runs())
 
@@ -387,11 +416,12 @@ async def missing_receipt_then_independent(settings, config, store, *, success):
     require(store.uncertain_execution(original.id) is None, "restored receipt did not release rule")
     require(len(store.list_runs()) == run_count + 1, "receipt restoration created another trade")
     await assert_one_swap(target, before)
-    await verify_nodes(settings, [(followup["tx_hash"], True)])
+    independent_nodes = await verify_nodes(settings, [(followup["tx_hash"], True)])
     return target, {
         "original": prepared.transaction.tx_hash,
         "independent": followup["tx_hash"],
         "original_success": success,
+        "node_verification": {"original": original_nodes, "independent": independent_nodes},
     }
 
 
@@ -411,13 +441,13 @@ async def run(settings, settings_path):
             approved.receipt is not None and approved.receipt.success, "test token approval failed"
         )
     concurrent_hash = await concurrent_evaluations(config, store)
-    await verify_nodes(settings, [(concurrent_hash, True)])
+    concurrent_nodes = await verify_nodes(settings, [(concurrent_hash, True)])
     config, crash_hash, unrelated_hash = await crash_and_reload(
         settings, config, store, settings_path
     )
-    await verify_nodes(settings, [(crash_hash, True)])
+    crash_nodes = await verify_nodes(settings, [(crash_hash, True)])
     reverted_hash, followup_hash = await reverted_then_followup(config, store)
-    await verify_nodes(settings, [(reverted_hash, False), (followup_hash, True)])
+    followup_nodes = await verify_nodes(settings, [(reverted_hash, False), (followup_hash, True)])
     missing_receipts = []
     for success in (True, False):
         config, result = await missing_receipt_then_independent(
@@ -428,6 +458,11 @@ async def run(settings, settings_path):
     return {
         "ok": True,
         "nodes_verified": 5,
+        "node_verification": {
+            "concurrent": concurrent_nodes,
+            "crash_recovery": crash_nodes,
+            "revert_and_followup": followup_nodes,
+        },
         "concurrent_swap": concurrent_hash,
         "recovered_after_process_exit": crash_hash,
         "reverted_swap": reverted_hash,

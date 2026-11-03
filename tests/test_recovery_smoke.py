@@ -74,6 +74,9 @@ def validators(monkeypatch):
                 setattr(result, *state.wrong_receipt)
             return result
 
+        async def get_node_status(self):
+            return SimpleNamespace(latest_block_height=409)
+
         async def get_state(self, *args):
             state.calls.append(("balance", self.node))
             return state.balances[self.node]
@@ -159,6 +162,15 @@ def test_completed_batch_still_rejects_real_balance_mismatch(validators):
 
     settings, state = validators
     state.divergent = True
-    with pytest.raises(RuntimeError, match="validator token balances diverged"):
+    with pytest.raises(RuntimeError, match="validator token balances diverged") as failure:
         asyncio.run(smoke.verify_nodes(settings, [("revert", False), ("followup", True)]))
+    details = json.loads(str(failure.value).split(": ", 1)[1])
+    assert len(details) == 5
+    assert details[4]["node_index"] == 4
+    assert details[4]["height_before"] == details[4]["height_after"] == 409
+    assert details[4]["receipts"] == [
+        {"tx_hash": "revert", "success": False},
+        {"tx_hash": "followup", "success": True},
+    ]
+    assert "never-used" not in str(failure.value)
     assert len([call for call in state.calls if call[0] == "balance"]) == 5

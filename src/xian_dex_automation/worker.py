@@ -10,6 +10,7 @@ from typing import Any
 from .config import AutomationConfig, RuleConfig
 from .dex import BPS, DexClient, PairSnapshot
 from .execution import reconcile_execution, reconcile_uncertain_rule
+from .logging_setup import RetryReporter
 from .rules import RuleRuntimeState, evaluate_price_move
 from .storage import AutomationStore
 
@@ -22,7 +23,8 @@ def _decimal_details(value: Decimal | None) -> str | None:
 
 def _execution_blocked(result: dict[str, Any]) -> bool:
     return result["status"] == "pending" or result["reason"] in {
-        "execution_busy", "configuration_draining",
+        "execution_busy",
+        "configuration_draining",
     }
 
 
@@ -36,6 +38,7 @@ class AutomationWorker:
         self.store = store
         self.config_generation = store.config_generation()
         self.last_error: str | None = None
+        self.retry_reporter = RetryReporter(logger)
 
     async def run_forever(self) -> None:
         while True:
@@ -47,9 +50,9 @@ class AutomationWorker:
                     tasks.create_task(self._watch_configuration())
             except* ConfigurationChanged:
                 pass
-            except* Exception:
+            except* Exception as exc:
                 self.last_error = "worker could not start or continue; check service logs"
-                logger.exception("automation worker failed; retrying with active configuration")
+                self.retry_reporter.failed(exc, config_generation=self.config_generation)
                 await asyncio.sleep(1)
 
     async def _watch_configuration(self) -> None:
@@ -104,7 +107,7 @@ class AutomationWorker:
                 self.config.dex.pairs_contract,
                 "Sync",
             )
-            logger.info(
+            logger.debug(
                 "watching %s Sync events after cursor %s",
                 self.config.dex.pairs_contract,
                 cursor,
@@ -114,6 +117,7 @@ class AutomationWorker:
                     await self._evaluate_event_pair(dex, pair_id)
                 if self._configuration_changed():
                     raise ConfigurationChanged()
+                self.retry_reporter.recovered()
                 if event.id is not None:
                     self.store.save_cursor(cursor_name, int(event.id))
                     cursor = int(event.id)
@@ -157,7 +161,9 @@ class AutomationWorker:
             if blocked is not None:
                 return [{"status": "skipped", "reason": blocked, "pair_id": pair_id}]
             if self._configuration_changed():
-                return [{"status": "skipped", "reason": "configuration_changed", "pair_id": pair_id}]
+                return [
+                    {"status": "skipped", "reason": "configuration_changed", "pair_id": pair_id}
+                ]
             # Bind this evaluation to one configuration and database even if
             # the admin API replaces the worker's settings while we await RPC.
             evaluator = AutomationWorker(self.config.model_copy(deep=True), store)

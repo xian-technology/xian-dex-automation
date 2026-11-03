@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
 import sys
 from ipaddress import ip_address
 
 from .config import load_config
+from .logging_setup import configure_logging
 from .service import ADMIN_TOKEN_ENV, configured_admin_token, create_app
 from .storage import AutomationStore
 from .worker import AutomationWorker
@@ -24,9 +24,7 @@ def is_loopback_host(host: str | None) -> bool:
 
 def validate_serve_host(host: str) -> None:
     if not is_loopback_host(host) and configured_admin_token() is None:
-        raise ValueError(
-            f"non-loopback API binds require {ADMIN_TOKEN_ENV} to be set"
-        )
+        raise ValueError(f"non-loopback API binds require {ADMIN_TOKEN_ENV} to be set")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,11 +77,12 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "run-worker":
-        logging.basicConfig(level=getattr(logging, args.log_level))
+        configure_logging(args.log_level)
         asyncio.run(run_worker(args.config))
         return
 
     if args.command == "serve":
+        configure_logging()
         import uvicorn
 
         try:
@@ -102,7 +101,7 @@ def main(argv: list[str] | None = None) -> None:
             start_worker=args.with_worker,
             config_path=args.config,
         )
-        uvicorn.run(app, host=args.host, port=args.port)
+        uvicorn.run(app, host=args.host, port=args.port, log_config=None, access_log=False)
         return
 
     parser.error(f"unknown command: {args.command}")

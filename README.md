@@ -370,3 +370,20 @@ unless the environment variables above are provided.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — major components and dependency direction
 - [docs/WALLET_MODEL.md](docs/WALLET_MODEL.md) — wallet model and security boundary
 - [config.example.yaml](config.example.yaml) — annotated example config
+
+## Operational logs
+
+Worker and API diagnostics go to stderr as UTC timestamp, severity,
+`dex-automation/component`, message and named context. Unexpected worker failures
+include exception types, bounded stack locations, configuration generation and
+retry delay. Repeated worker failures log once per minute with attempt/suppression
+counts; successful event processing logs recovery. Exception messages, locals, signing material and transaction payloads
+are omitted. Routine HTTP access logs are disabled; the API still reports errors.
+The service does not own a log file: configure retention in its Docker or host
+supervisor. Workspace supervisors retain at most 250 MiB; host capture also
+expires files after seven days. Size limits can discard older entries sooner.
+
+The recovery smoke report includes each validator's receipt outcomes and heights
+immediately before and after token balance reads. These are observations around
+the read, not a claim that the state query was pinned to a particular height.
+Balance mismatches remain failures even when those observed heights differ.
