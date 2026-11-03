@@ -120,20 +120,27 @@ async def balance_and_nonce(config):
     return Decimal(str(balance)), nonce
 
 
-async def verify_nodes(settings, tx_hash, success):
+async def verify_nodes(settings, outcomes):
     async def verify(url):
         async with XianAsync(url, chain_id=settings["chain_id"]) as client:
-            result = await client.wait_for_tx(tx_hash, timeout_seconds=30)
-            require(
-                result.tx_hash == tx_hash and result.success is success,
-                "validators disagree on transaction outcome",
-            )
-            balance = await client.get_state(
+            for tx_hash, success in outcomes:
+                result = await client.wait_for_tx(tx_hash, timeout_seconds=30)
+                require(
+                    result.tx_hash == tx_hash and result.success is success,
+                    "validators disagree on transaction outcome",
+                )
+
+    async def balance(url):
+        async with XianAsync(url, chain_id=settings["chain_id"]) as client:
+            value = await client.get_state(
                 settings["token_in"], "balances", Wallet(settings["private_key"]).public_key
             )
-            return str(balance)
+            return str(value)
 
-    balances = await asyncio.gather(*(verify(url) for url in settings["rpc_urls"]))
+    # No more probe trades are submitted during verification. Wait for the whole
+    # submitted batch everywhere before comparing each validator's latest state.
+    await asyncio.gather(*(verify(url) for url in settings["rpc_urls"]))
+    balances = await asyncio.gather(*(balance(url) for url in settings["rpc_urls"]))
     require(len(set(balances)) == 1, "validator token balances diverged")
 
 
@@ -327,7 +334,7 @@ async def missing_receipt_then_independent(settings, config, store, *, success):
             require(await transport.broadcast() is None, "missing receipt probe rejected")
     # The test oracle knows the result on all validators. Hide ONLY this hash's
     # receipt from automation, leaving real committed-state reads and signing.
-    await verify_nodes(settings, prepared.transaction.tx_hash, success)
+    await verify_nodes(settings, [(prepared.transaction.tx_hash, success)])
     before = await balance_and_nonce(target)
     run_count = len(store.list_runs())
 
@@ -380,7 +387,7 @@ async def missing_receipt_then_independent(settings, config, store, *, success):
     require(store.uncertain_execution(original.id) is None, "restored receipt did not release rule")
     require(len(store.list_runs()) == run_count + 1, "receipt restoration created another trade")
     await assert_one_swap(target, before)
-    await verify_nodes(settings, followup["tx_hash"], True)
+    await verify_nodes(settings, [(followup["tx_hash"], True)])
     return target, {
         "original": prepared.transaction.tx_hash,
         "independent": followup["tx_hash"],
@@ -404,14 +411,13 @@ async def run(settings, settings_path):
             approved.receipt is not None and approved.receipt.success, "test token approval failed"
         )
     concurrent_hash = await concurrent_evaluations(config, store)
-    await verify_nodes(settings, concurrent_hash, True)
+    await verify_nodes(settings, [(concurrent_hash, True)])
     config, crash_hash, unrelated_hash = await crash_and_reload(
         settings, config, store, settings_path
     )
-    await verify_nodes(settings, crash_hash, True)
+    await verify_nodes(settings, [(crash_hash, True)])
     reverted_hash, followup_hash = await reverted_then_followup(config, store)
-    await verify_nodes(settings, reverted_hash, False)
-    await verify_nodes(settings, followup_hash, True)
+    await verify_nodes(settings, [(reverted_hash, False), (followup_hash, True)])
     missing_receipts = []
     for success in (True, False):
         config, result = await missing_receipt_then_independent(

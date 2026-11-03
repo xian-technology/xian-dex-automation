@@ -354,8 +354,10 @@ successful swap, and an unrelated wallet transacting while automation is pending
 It also hides receipts for both a successful and a reverted swap, verifies
 independent trades from the same wallet, prevents the original decision from
 repeating across worker recreation and RPC reload, and restores receipts to verify
-safe rule resumption. Receipts and token balances must agree on all five nodes; successful swaps must
-consume exactly one nonce and one input debit. The harness uses dedicated funded
+safe rule resumption. Before comparing latest token balances, the probe waits for
+every transaction in the submitted batch on all five validators, including both
+the reverted swap and its follow-up. Receipt or balance mismatches still fail the
+probe. Successful swaps must consume exactly one nonce and one input debit. The harness uses dedicated funded
 test wallets and deletes its temporary private-input file.
 
 GitHub Actions runs lint, unit / frontend tests, and compile checks on
