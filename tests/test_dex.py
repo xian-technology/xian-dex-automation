@@ -23,6 +23,7 @@ from xian_dex_automation.dex import (
     DexClient,
     PairSnapshot,
     decimal_value,
+    with_basis_points,
     xian_deadline,
 )
 
@@ -49,6 +50,16 @@ class FakeClient:
 
     async def get_node_status(self):
         return SimpleNamespace(latest_block_time_iso="2026-07-12T12:00:00Z")
+
+
+def test_quote_and_slippage_use_the_contracts_scale() -> None:
+    dex = DexClient(AutomationConfig())
+    dex.trade_fee_bps = AsyncMock(return_value=0)
+    snapshot = PairSnapshot(1, "currency", "con_token", Decimal("2"), Decimal("1"))
+
+    quote = asyncio.run(dex.quote_exact_in(snapshot, src="currency", amount_in=Decimal(1)))
+    assert quote == Decimal("0." + "3" * 30)
+    assert with_basis_points(quote, 9999) == Decimal("0.3332" + "9" * 26)
 
 
 def test_swap_exact_in_preserves_decimal_payloads() -> None:

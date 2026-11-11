@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from contracting.compilation.artifacts import compile_contract_source
-from xian_py import Wallet, Xian
+from xian_py import Wallet, Xian, XianClientConfig
 
 from xian_dex_automation.config import (
     AutomationConfig,
@@ -25,7 +25,7 @@ from xian_dex_automation.config import (
     WalletConfig,
     save_config,
 )
-from xian_dex_automation.dex import BPS, ContractCallPlan, DexClient
+from xian_dex_automation.dex import ContractCallPlan, DexClient, with_basis_points
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = ROOT.parent
@@ -218,6 +218,7 @@ def _canonical_source_digest(*, module_name: str, source: str) -> str:
     canonical_source = compile_contract_source(
         module_name=module_name,
         source=source,
+        vm_profile="xian_vm_v2",
     )["source"]
     return hashlib.sha256(canonical_source.encode("utf-8")).hexdigest()
 
@@ -289,9 +290,7 @@ async def _prepare_exercise(
             src=action.src,
             amount_in=action.amount_in,
         )
-        amount_out_min = quote * (
-            (BPS - Decimal(action.max_slippage_bps)) / BPS
-        )
+        amount_out_min = with_basis_points(quote, 10_000 - action.max_slippage_bps)
         call = await dex.build_swap_exact_in_call(
             snapshot,
             action,
@@ -457,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         rpc_url,
         chain_id=chain_id,
         wallet=owner_wallet,
+        config=XianClientConfig(vm_profile="xian_vm_v2"),
     ) as owner_client:
         existing_source = owner_client.get_contract_source(args.contract_name)
         deployed_now = existing_source is None
@@ -543,7 +543,12 @@ def main(argv: list[str] | None = None) -> int:
         args.keeper_gas_funding,
         exercise_plan.required_currency,
     )
-    with Xian(rpc_url, chain_id=chain_id, wallet=owner_wallet) as owner_client:
+    with Xian(
+        rpc_url,
+        chain_id=chain_id,
+        wallet=owner_wallet,
+        config=XianClientConfig(vm_profile="xian_vm_v2"),
+    ) as owner_client:
         keeper_balance = Decimal(
             str(
                 owner_client.contract("currency").call(
@@ -588,10 +593,13 @@ def main(argv: list[str] | None = None) -> int:
             _exercise(service_config, exercise_plan)
         )
 
-    with Xian(rpc_url, chain_id=chain_id, wallet=owner_wallet) as client:
-        payload["on_chain_strategy"] = client.contract(args.contract_name).call(
-            "get_strategy"
-        )
+    with Xian(
+        rpc_url,
+        chain_id=chain_id,
+        wallet=owner_wallet,
+        config=XianClientConfig(vm_profile="xian_vm_v2"),
+    ) as client:
+        payload["on_chain_strategy"] = client.contract(args.contract_name).call("get_strategy")
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return 0
 

@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from .config import AutomationConfig, RuleConfig
-from .dex import BPS, DexClient, PairSnapshot
+from .dex import DexClient, PairSnapshot, with_basis_points
 from .execution import reconcile_execution, reconcile_uncertain_rule
 from .logging_setup import RetryReporter
 from .rules import RuleRuntimeState, evaluate_price_move
@@ -256,7 +256,7 @@ class AutomationWorker:
                 "details": details,
             }
 
-        amount_out_min = quote * ((BPS - Decimal(rule.action.max_slippage_bps)) / BPS)
+        amount_out_min = with_basis_points(quote, 10_000 - rule.action.max_slippage_bps)
         details.update(
             {
                 "amount_in": str(rule.action.amount_in),

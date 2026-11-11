@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from xian_py import XianAsync
+from xian_py import XianAsync, XianClientConfig
 from xian_py import transaction as tr
 from xian_py.exception import TxTimeoutError
 from xian_py.models import TransactionReceipt
@@ -47,7 +47,11 @@ class SwapTransport:
 
     def __init__(self, prepared: PreparedSwap):
         self.prepared = prepared
-        self.client = XianAsync(prepared.rpc_url, chain_id=prepared.chain_id)
+        self.client = XianAsync(
+            prepared.rpc_url,
+            chain_id=prepared.chain_id,
+            config=XianClientConfig(vm_profile="xian_vm_v2"),
+        )
 
     async def __aenter__(self):
         await self.client.__aenter__()

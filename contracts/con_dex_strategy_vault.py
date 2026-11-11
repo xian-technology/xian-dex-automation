@@ -14,14 +14,14 @@ Deposited = LogEvent(
     "Deposited",
     {
         "token": {"type": str, "idx": True},
-        "amount": {"type": (int, float, decimal)},
+        "amount": {"type": (int, decimal)},
     },
 )
 Withdrawn = LogEvent(
     "Withdrawn",
     {
         "token": {"type": str, "idx": True},
-        "amount": {"type": (int, float, decimal)},
+        "amount": {"type": (int, decimal)},
     },
 )
 SwapExecuted = LogEvent(
@@ -29,8 +29,8 @@ SwapExecuted = LogEvent(
     {
         "keeper": {"type": str, "idx": True},
         "pair": {"type": int, "idx": True},
-        "amount_in": {"type": (int, float, decimal)},
-        "amount_out": {"type": (int, float, decimal)},
+        "amount_in": {"type": (int, decimal)},
+        "amount_out": {"type": (int, decimal)},
     },
 )
 
@@ -41,8 +41,8 @@ def seed(
     pair: int,
     src: str,
     token_out: str,
-    max_trade_size: float,
-    total_spend_cap: float,
+    max_trade_size: decimal,
+    total_spend_cap: decimal,
     max_slippage_bps: int = 100,
     cooldown_seconds: int = 300,
     max_deadline_seconds: int = 300,
@@ -115,7 +115,7 @@ def get_strategy():
 
 
 @export
-def deposit(token: str, amount: float):
+def deposit(token: str, amount: decimal):
     require_owner()
     assert amount > 0, "VAULT: INVALID_AMOUNT"
     token_contract = require_token(token)
@@ -128,7 +128,7 @@ def deposit(token: str, amount: float):
 
 
 @export
-def withdraw(token: str, amount: float):
+def withdraw(token: str, amount: decimal):
     require_owner()
     assert amount > 0, "VAULT: INVALID_AMOUNT"
     token_contract = require_token(token)
@@ -162,8 +162,8 @@ def set_paused(value: bool):
 
 @export
 def tighten_limits(
-    max_trade_size: float,
-    total_spend_cap: float,
+    max_trade_size: decimal,
+    total_spend_cap: decimal,
     max_slippage_bps: int,
     cooldown_seconds: int,
     max_deadline_seconds: int,
@@ -193,7 +193,7 @@ def tighten_limits(
 
 
 @export
-def execute_swap(amount_in: float, amount_out_min: float, deadline: datetime.datetime):
+def execute_swap(amount_in: decimal, amount_out_min: decimal, deadline: datetime.datetime):
     assert ctx.caller == settings["keeper"], "VAULT: KEEPER_ONLY"
     assert paused.get() is False, "VAULT: PAUSED"
     assert amount_in > 0, "VAULT: INVALID_AMOUNT"

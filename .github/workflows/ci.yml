@@ -16,9 +16,25 @@ jobs:
         python-version:
           - "3.14"
 
+    defaults:
+      run:
+        working-directory: xian-dex-automation
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          path: xian-dex-automation
+
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/xian-contracting
+          path: xian-contracting
+
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/xian-py
+          path: xian-py
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -30,14 +46,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Sync published dependencies
-        run: uv sync --no-sources --extra dev
+      - name: Sync locked workspace dependencies
+        run: uv sync --locked --extra dev
 
       - name: Lint
-        run: uv run --no-sources --extra dev ruff check .
+        run: uv run --locked --extra dev ruff check .
 
       - name: Test
-        run: uv run --no-sources --extra dev pytest
+        run: uv run --locked --extra dev pytest
 
       - name: Compile
-        run: uv run --no-sources --extra dev python -m compileall src tests
+        run: uv run --locked --extra dev python -m compileall src tests

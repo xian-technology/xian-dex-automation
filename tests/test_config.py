@@ -11,6 +11,7 @@ from xian_dex_automation.config import (
     AutomationConfig,
     load_config,
     normalize_config_paths,
+    parse_config_text,
 )
 from xian_dex_automation.dex import install_contracting_decimal_context
 
@@ -137,3 +138,10 @@ def test_strategy_vault_config_rejects_rules_outside_on_chain_envelope() -> None
 
     with pytest.raises(ValidationError):
         AutomationConfig.model_validate(payload)
+
+
+def test_unquoted_yaml_amount_keeps_all_source_digits(tmp_path):
+    source = (Path(__file__).resolve().parents[1] / "config.example.yaml").read_text()
+    source = source.replace('amount_in: "1"', "amount_in: 1.000000000000000000000000000001")
+    config = parse_config_text(source, config_path=tmp_path / "automation.yaml")
+    assert config.rules[0].action.amount_in == Decimal("1.000000000000000000000000000001")

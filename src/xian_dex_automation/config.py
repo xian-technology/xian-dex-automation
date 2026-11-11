@@ -8,6 +8,20 @@ from typing import Literal, Self
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
+from xian_runtime_types.decimal import canonical_fixed
+
+
+class ConfigLoader(yaml.SafeLoader):
+    """Keep decimal YAML tokens intact until the field type is known."""
+
+
+ConfigLoader.add_constructor("tag:yaml.org,2002:float", yaml.SafeLoader.construct_scalar)
+
+
+def exact_amount(value: object) -> Decimal:
+    if not isinstance(value, (str, int, Decimal)) or isinstance(value, bool):
+        raise ValueError("an amount must be decimal text, an integer or an exact decimal")
+    return Decimal(canonical_fixed(value))
 
 
 class NetworkConfig(BaseModel):
@@ -45,9 +59,7 @@ class StrategyVaultConfig(BaseModel):
     @field_validator("max_trade_size", "total_spend_cap", mode="before")
     @classmethod
     def coerce_decimal(cls, value: object) -> object:
-        if isinstance(value, float):
-            return str(value)
-        return value
+        return exact_amount(value)
 
     @model_validator(mode="after")
     def validate_budget(self) -> Self:
@@ -96,9 +108,7 @@ class SwapExactInActionConfig(BaseModel):
     @field_validator("amount_in", mode="before")
     @classmethod
     def coerce_amount_in(cls, value: object) -> object:
-        if isinstance(value, float):
-            return str(value)
-        return value
+        return exact_amount(value)
 
 
 class RuleConfig(BaseModel):
@@ -125,8 +135,7 @@ class AutomationConfig(BaseModel):
             return self
         if self.wallet.recipient is not None:
             raise ValueError(
-                "wallet.recipient must be null in strategy_vault mode; "
-                "the vault retains all output"
+                "wallet.recipient must be null in strategy_vault mode; the vault retains all output"
             )
         for rule in self.rules:
             if rule.trigger.pair_id != strategy.pair_id:
@@ -200,7 +209,7 @@ def parse_config_text(
     *,
     config_path: str | Path,
 ) -> AutomationConfig:
-    raw = yaml.safe_load(text) or {}
+    raw = yaml.load(text, Loader=ConfigLoader) or {}
     return normalize_config_paths(
         AutomationConfig.model_validate(raw),
         config_path=config_path,

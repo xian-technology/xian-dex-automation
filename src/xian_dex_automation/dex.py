@@ -9,12 +9,12 @@ from decimal import Decimal
 from typing import Any
 
 from xian_py import transaction as tr
+from xian_runtime_types.decimal import ContractingDecimal, canonical_fixed
 
 from .config import AutomationConfig, SwapExactInActionConfig
 from .credentials import credential_source
 from .submission import PreparedSwap
 
-BPS = Decimal("10000")
 DEADLINE_SAFETY_MARGIN_SECONDS = 5
 
 logger = logging.getLogger(__name__)
@@ -103,9 +103,12 @@ def decimal_value(value: Any) -> Decimal:
     try:
         return Decimal(str(value))
     except Exception as exc:
-        raise DexAutomationError(
-            f"expected numeric value, got {value!r}"
-        ) from exc
+        raise DexAutomationError(f"expected numeric value, got {value!r}") from exc
+
+
+def with_basis_points(amount: Decimal, bps: int) -> Decimal:
+    ratio = ContractingDecimal(bps) / 10_000
+    return Decimal(canonical_fixed(ContractingDecimal(canonical_fixed(amount)) * ratio))
 
 
 def _parse_node_time(value: str | None) -> datetime | None:
@@ -168,8 +171,7 @@ class DexClient:
         private_key = resolve_private_key(self.config)
         if self.config.wallet.execute and not private_key:
             raise DexAutomationError(
-                "wallet.execute is true but "
-                f"{self.config.wallet.private_key_env} is not set"
+                f"wallet.execute is true but {self.config.wallet.private_key_env} is not set"
             )
 
         wallet = Wallet(private_key) if private_key else Wallet()
@@ -182,8 +184,7 @@ class DexClient:
             and self.wallet_address != strategy.keeper_address
         ):
             raise DexAutomationError(
-                "configured automation wallet does not match "
-                "custody.strategy_vault.keeper_address"
+                "configured automation wallet does not match custody.strategy_vault.keeper_address"
             )
         client_config = XianClientConfig(
             retry=RetryPolicy(max_attempts=3, initial_delay_seconds=0.25),
@@ -194,6 +195,7 @@ class DexClient:
                 ),
                 batch_limit=100,
             ),
+            vm_profile="xian_vm_v2",
         )
         self._client = XianAsync(
             self.config.network.rpc_url,
@@ -252,13 +254,13 @@ class DexClient:
         amount_in: Decimal,
     ) -> Decimal:
         reserve_in, reserve_out, _token_out = snapshot.reserves_for_src(src)
-        fee_bps = Decimal(await self.trade_fee_bps())
+        fee_bps = await self.trade_fee_bps()
         if reserve_in <= 0 or reserve_out <= 0:
             raise DexAutomationError("pair has insufficient liquidity")
-        amount_in_with_fee = amount_in * ((BPS - fee_bps) / BPS)
-        return (amount_in_with_fee * reserve_out) / (
-            reserve_in + amount_in_with_fee
-        )
+        amount_in_with_fee = ContractingDecimal(with_basis_points(amount_in, 10_000 - fee_bps))
+        numerator = amount_in_with_fee * ContractingDecimal(canonical_fixed(reserve_out))
+        denominator = ContractingDecimal(canonical_fixed(reserve_in)) + amount_in_with_fee
+        return Decimal(canonical_fixed(numerator / denominator))
 
     async def transaction_deadline(
         self,
@@ -326,11 +328,7 @@ class DexClient:
                 },
             )
 
-        recipient = (
-            action.recipient
-            or self.config.wallet.recipient
-            or self.wallet_address
-        )
+        recipient = action.recipient or self.config.wallet.recipient or self.wallet_address
         if recipient is None:
             raise DexAutomationError("swap recipient is not configured")
 
@@ -397,6 +395,7 @@ class DexClient:
                     "chi_supplied": estimate["suggested"],
                 },
                 self.client.wallet,
+                vm_profile="xian_vm_v2",
             )
         )
         return PreparedSwap(self.client.node_url, chain_id, transaction)

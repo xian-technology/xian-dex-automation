@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 from contracting.local import ContractingClient
@@ -23,19 +24,19 @@ def balance_of(address: str):
     return balances[address]
 
 @export
-def transfer(amount: float, to: str):
+def transfer(amount: decimal, to: str):
     assert amount > 0
     assert balances[ctx.caller] >= amount
     balances[ctx.caller] -= amount
     balances[to] += amount
 
 @export
-def approve(amount: float, to: str):
+def approve(amount: decimal, to: str):
     assert amount >= 0
     approvals[ctx.caller, to] = amount
 
 @export
-def transfer_from(amount: float, to: str, main_account: str):
+def transfer_from(amount: decimal, to: str, main_account: str):
     assert amount > 0
     assert approvals[main_account, ctx.caller] >= amount
     assert balances[main_account] >= amount
@@ -44,7 +45,7 @@ def transfer_from(amount: float, to: str, main_account: str):
     balances[to] += amount
 
 @export
-def mint(amount: float, to: str):
+def mint(amount: decimal, to: str):
     balances[to] += amount
 """
 
@@ -63,15 +64,15 @@ def get_pair_tokens(pair: int):
 
 DEX_CODE = """
 @export
-def getAmountsOut(amountIn: float, src: str, path: list):
+def getAmountsOut(amountIn: decimal, src: str, path: list):
     assert src == "currency"
     assert path == [1]
     return [amountIn, amountIn * 2]
 
 @export
 def swapExactTokenForToken(
-    amountIn: float,
-    amountOutMin: float,
+    amountIn: decimal,
+    amountOutMin: decimal,
     pair: int,
     src: str,
     to: str,
@@ -92,7 +93,7 @@ class TestStrategyVaultContract(unittest.TestCase):
     def setUp(self) -> None:
         self._storage_home = tempfile.TemporaryDirectory()
         self.client = ContractingClient(
-            storage_home=Path(self._storage_home.name)
+            vm_profile="xian_vm_v2", storage_home=Path(self._storage_home.name)
         )
         self.client.flush()
         self.client.submit(TOKEN_CODE, name="currency")
@@ -158,7 +159,7 @@ class TestStrategyVaultContract(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.vault.execute_swap(
                 amount_in=10,
-                amount_out_min=19.8,
+                amount_out_min=Decimal("19.8"),
                 deadline=Datetime(2026, 1, 1, 12, 4, 0),
                 signer="attacker",
                 environment={"now": self.now},
@@ -185,11 +186,11 @@ class TestStrategyVaultContract(unittest.TestCase):
 
         self.execute()
         with self.assertRaises(AssertionError):
-            self.execute(amount_in=10, amount_out_min=19.8, minute=1)
+            self.execute(amount_in=10, amount_out_min=Decimal("19.8"), minute=1)
         with self.assertRaises(AssertionError):
             self.execute(
                 amount_in=51,
-                amount_out_min=100.98,
+                amount_out_min=Decimal("100.98"),
                 minute=5,
                 deadline_minute=9,
             )

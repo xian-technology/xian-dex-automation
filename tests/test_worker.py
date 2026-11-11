@@ -119,7 +119,7 @@ def test_worker_records_dry_run_and_updates_cooldown_state(tmp_path) -> None:
     runs = store.list_runs()
     assert runs[0]["status"] == "dry_run"
     assert runs[0]["tx_hash"] is None
-    assert runs[0]["details"]["amount_out_min"] == "9.90"
+    assert runs[0]["details"]["amount_out_min"] == "9.9"
 
 
 def test_worker_submits_swap_when_execution_is_enabled(tmp_path, network) -> None:
