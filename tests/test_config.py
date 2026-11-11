@@ -145,3 +145,39 @@ def test_unquoted_yaml_amount_keeps_all_source_digits(tmp_path):
     source = source.replace('amount_in: "1"', "amount_in: 1.000000000000000000000000000001")
     config = parse_config_text(source, config_path=tmp_path / "automation.yaml")
     assert config.rules[0].action.amount_in == Decimal("1.000000000000000000000000000001")
+
+
+@pytest.mark.parametrize("other_pair, enabled", [(1, True), (2, True), (2, False)])
+def test_configuration_rejects_duplicate_rule_identity(other_pair, enabled):
+    rule = {
+        "id": "shared-state",
+        "trigger": {"pair_id": 1, "threshold_bps": 100},
+        "action": {"src": "currency", "amount_in": "1"},
+    }
+    other = {
+        **rule,
+        "enabled": enabled,
+        "trigger": {"pair_id": other_pair, "threshold_bps": 200},
+    }
+
+    with pytest.raises(ValidationError, match="rule ids must be unique"):
+        AutomationConfig.model_validate({"rules": [rule, other]})
+
+
+def test_distinct_rule_identities_keep_independent_market_state():
+    config = AutomationConfig.model_validate(
+        {
+            "rules": [
+                {
+                    "id": identifier,
+                    "trigger": {"pair_id": pair, "threshold_bps": 100},
+                    "action": {"src": "currency", "amount_in": "1"},
+                }
+                for identifier, pair in [("first", 1), ("second", 2)]
+            ]
+        }
+    )
+    assert [(rule.id, rule.trigger.pair_id) for rule in config.rules] == [
+        ("first", 1),
+        ("second", 2),
+    ]

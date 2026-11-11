@@ -66,9 +66,7 @@ class StrategyVaultConfig(BaseModel):
         if self.src == self.token_out:
             raise ValueError("strategy vault src and token_out must differ")
         if self.total_spend_cap < self.max_trade_size:
-            raise ValueError(
-                "strategy vault total_spend_cap must be at least max_trade_size"
-            )
+            raise ValueError("strategy vault total_spend_cap must be at least max_trade_size")
         return self
 
 
@@ -79,13 +77,9 @@ class CustodyConfig(BaseModel):
     @model_validator(mode="after")
     def validate_mode(self) -> Self:
         if self.mode == "strategy_vault" and self.strategy_vault is None:
-            raise ValueError(
-                "custody.strategy_vault is required in strategy_vault mode"
-            )
+            raise ValueError("custody.strategy_vault is required in strategy_vault mode")
         if self.mode == "direct_wallet" and self.strategy_vault is not None:
-            raise ValueError(
-                "custody.strategy_vault must be omitted in direct_wallet mode"
-            )
+            raise ValueError("custody.strategy_vault must be omitted in direct_wallet mode")
         return self
 
 
@@ -126,6 +120,14 @@ class AutomationConfig(BaseModel):
     database_path: Path = Path("state/xian-dex-automation.sqlite3")
     rules: list[RuleConfig] = Field(default_factory=list)
 
+    @field_validator("rules")
+    @classmethod
+    def validate_rule_identities(cls, rules: list[RuleConfig]) -> list[RuleConfig]:
+        identifiers = [rule.id for rule in rules]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("rule ids must be unique")
+        return rules
+
     @model_validator(mode="after")
     def validate_strategy_rules(self) -> Self:
         if self.custody.mode != "strategy_vault":
@@ -139,33 +141,19 @@ class AutomationConfig(BaseModel):
             )
         for rule in self.rules:
             if rule.trigger.pair_id != strategy.pair_id:
-                raise ValueError(
-                    f"rule {rule.id!r} pair_id exceeds the strategy vault scope"
-                )
+                raise ValueError(f"rule {rule.id!r} pair_id exceeds the strategy vault scope")
             if rule.action.src != strategy.src:
-                raise ValueError(
-                    f"rule {rule.id!r} src exceeds the strategy vault scope"
-                )
+                raise ValueError(f"rule {rule.id!r} src exceeds the strategy vault scope")
             if rule.action.recipient is not None:
-                raise ValueError(
-                    f"rule {rule.id!r} recipient must be null in strategy_vault mode"
-                )
+                raise ValueError(f"rule {rule.id!r} recipient must be null in strategy_vault mode")
             if rule.action.amount_in > strategy.max_trade_size:
-                raise ValueError(
-                    f"rule {rule.id!r} amount_in exceeds strategy max_trade_size"
-                )
+                raise ValueError(f"rule {rule.id!r} amount_in exceeds strategy max_trade_size")
             if rule.action.max_slippage_bps > strategy.max_slippage_bps:
-                raise ValueError(
-                    f"rule {rule.id!r} slippage exceeds strategy maximum"
-                )
+                raise ValueError(f"rule {rule.id!r} slippage exceeds strategy maximum")
             if rule.action.deadline_seconds > strategy.max_deadline_seconds:
-                raise ValueError(
-                    f"rule {rule.id!r} deadline exceeds strategy maximum"
-                )
+                raise ValueError(f"rule {rule.id!r} deadline exceeds strategy maximum")
             if rule.trigger.cooldown_seconds < strategy.cooldown_seconds:
-                raise ValueError(
-                    f"rule {rule.id!r} cooldown is shorter than strategy minimum"
-                )
+                raise ValueError(f"rule {rule.id!r} cooldown is shorter than strategy minimum")
         return self
 
 
@@ -235,8 +223,11 @@ def save_config(config: AutomationConfig, path: str | Path) -> None:
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=config_path.parent,
-            prefix=f".{config_path.name}.", delete=False,
+            mode="w",
+            encoding="utf-8",
+            dir=config_path.parent,
+            prefix=f".{config_path.name}.",
+            delete=False,
         ) as handle:
             temporary = Path(handle.name)
             handle.write(render_config(config))

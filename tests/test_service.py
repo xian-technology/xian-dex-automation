@@ -66,9 +66,35 @@ def test_index_and_config_yaml(tmp_path) -> None:
         "mode": "direct_wallet",
         "strategy_vault": None,
     }
-    assert client.get("/wallet", headers=admin_headers()).json()[
-        "keeper_matches_config"
-    ] is None
+    assert client.get("/wallet", headers=admin_headers()).json()["keeper_matches_config"] is None
+
+
+def test_duplicate_rule_configuration_is_rejected_without_publication(tmp_path):
+    import json
+
+    client, config_path = make_client(tmp_path)
+    original = config_path.read_bytes()
+    rule = {
+        "id": "shared-state",
+        "trigger": {"pair_id": 1, "threshold_bps": 100},
+        "action": {"src": "currency", "amount_in": "1"},
+    }
+
+    response = client.put(
+        "/config.yaml",
+        content=json.dumps(
+            {
+                "database_path": str(load_config(config_path).database_path),
+                "rules": [rule, {**rule, "trigger": {"pair_id": 2, "threshold_bps": 100}}],
+            }
+        ),
+        headers={**admin_headers(), "content-type": "text/plain"},
+    )
+
+    assert response.status_code == 400
+    assert "rule ids must be unique" in response.json()["detail"]
+    assert config_path.read_bytes() == original
+    assert client.get("/rules", headers=admin_headers()).json() == []
 
 
 def test_strategy_vault_api_rejects_rule_outside_custody_envelope(tmp_path) -> None:
@@ -134,9 +160,7 @@ rules: []
         headers=admin_headers(),
     )
     assert enable_response.status_code == 400
-    assert "matching custody.strategy_vault.keeper_address" in enable_response.json()[
-        "detail"
-    ]
+    assert "matching custody.strategy_vault.keeper_address" in enable_response.json()["detail"]
     assert load_config(config_path).wallet.execute is False
 
 
@@ -146,20 +170,26 @@ def test_admin_api_requires_bearer_token(tmp_path) -> None:
     assert client.get("/").status_code == 200
     assert client.get("/health").status_code == 200
     assert client.get("/rules").status_code == 401
-    assert client.get(
-        "/rules",
-        headers={"authorization": "Bearer wrong-token"},
-    ).status_code == 401
+    assert (
+        client.get(
+            "/rules",
+            headers={"authorization": "Bearer wrong-token"},
+        ).status_code
+        == 401
+    )
 
 
 def test_admin_api_requires_configured_token(tmp_path) -> None:
     client, _config_path = make_client(tmp_path, admin_token="")
 
     assert client.get("/health").status_code == 200
-    assert client.get(
-        "/rules",
-        headers=admin_headers(),
-    ).status_code == 503
+    assert (
+        client.get(
+            "/rules",
+            headers=admin_headers(),
+        ).status_code
+        == 503
+    )
 
 
 def test_admin_api_rejects_cross_origin_mutations(tmp_path) -> None:

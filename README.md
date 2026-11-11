@@ -269,6 +269,9 @@ are intentionally separate human-approved setup steps.
 
 ## Rule Shape
 
+Each rule has a unique ID. Baselines, cooldowns and recovery holds belong to that
+ID, so duplicate IDs are rejected when loading or publishing a configuration.
+
 - **Trigger** `price_move` — stores the first observed pair price as a
   baseline, fires when the pair price moves by the configured basis points
   from that baseline. After a dry-run or executed action, the current
