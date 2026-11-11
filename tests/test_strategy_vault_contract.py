@@ -92,9 +92,7 @@ def swapExactTokenForToken(
 class TestStrategyVaultContract(unittest.TestCase):
     def setUp(self) -> None:
         self._storage_home = tempfile.TemporaryDirectory()
-        self.client = ContractingClient(
-            vm_profile="xian_vm_v2", storage_home=Path(self._storage_home.name)
-        )
+        self.client = ContractingClient(storage_home=Path(self._storage_home.name))
         self.client.flush()
         self.client.submit(TOKEN_CODE, name="currency")
         self.client.submit(TOKEN_CODE, name="con_output")

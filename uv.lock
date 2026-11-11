@@ -1,5 +1,5 @@
 version = 1
-revision = 1
+revision = 5
 requires-python = "==3.14.*"
 
 [[package]]
@@ -789,7 +789,7 @@ dev = [
     { name = "httpx" },
     { name = "pytest" },
     { name = "ruff" },
-    { name = "xian-tech-contracting", extra = ["v2"] },
+    { name = "xian-tech-contracting" },
 ]
 
 [package.metadata]
@@ -801,7 +801,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.12,<0.16" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.46.0,<0.47" },
-    { name = "xian-tech-contracting", extras = ["v2"], marker = "extra == 'dev'", editable = "../xian-contracting" },
+    { name = "xian-tech-contracting", marker = "extra == 'dev'", editable = "../xian-contracting" },
     { name = "xian-tech-py", editable = "../xian-py" },
     { name = "xian-tech-runtime-types", editable = "../xian-contracting/packages/xian-runtime-types" },
 ]
@@ -833,10 +833,6 @@ dependencies = [
     { name = "pynacl" },
     { name = "xian-tech-compiler-core" },
     { name = "xian-tech-runtime-types" },
-]
-
-[package.optional-dependencies]
-v2 = [
     { name = "xian-tech-vm-core" },
 ]
 
@@ -848,7 +844,7 @@ requires-dist = [
     { name = "xian-tech-compiler-core", directory = "../xian-contracting/packages/xian-compiler-core" },
     { name = "xian-tech-fastpath-core", marker = "extra == 'native'", editable = "../xian-contracting/packages/xian-fastpath-core" },
     { name = "xian-tech-runtime-types", editable = "../xian-contracting/packages/xian-runtime-types" },
-    { name = "xian-tech-vm-core", marker = "extra == 'v2'", directory = "../xian-contracting/packages/xian-vm-core" },
+    { name = "xian-tech-vm-core", directory = "../xian-contracting/packages/xian-vm-core" },
     { name = "xian-tech-zk", marker = "extra == 'zk'", editable = "../xian-contracting/packages/xian-zk" },
 ]
 provides-extras = ["v2", "native", "zk"]

@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
-from xian_py import XianAsync, XianClientConfig
+from xian_py import XianAsync
 from xian_py import transaction as tr
 from xian_py.wallet import Wallet
 
@@ -123,9 +123,7 @@ async def balance_and_nonce(config):
 async def verify_nodes(settings, outcomes):
     async def verify(node_index, url):
         receipts = []
-        async with XianAsync(
-            url, chain_id=settings["chain_id"], config=XianClientConfig(vm_profile="xian_vm_v2")
-        ) as client:
+        async with XianAsync(url, chain_id=settings["chain_id"]) as client:
             for tx_hash, success in outcomes:
                 result = await client.wait_for_tx(tx_hash, timeout_seconds=30)
                 require(
@@ -146,9 +144,7 @@ async def verify_nodes(settings, outcomes):
         return receipts
 
     async def balance(node_index, url, receipts):
-        async with XianAsync(
-            url, chain_id=settings["chain_id"], config=XianClientConfig(vm_profile="xian_vm_v2")
-        ) as client:
+        async with XianAsync(url, chain_id=settings["chain_id"]) as client:
             before = await client.get_node_status()
             value = await client.get_state(
                 settings["token_in"], "balances", Wallet(settings["private_key"]).public_key
@@ -227,7 +223,6 @@ async def unrelated_transfer(settings):
         settings["rpc_urls"][1],
         wallet=wallet,
         chain_id=settings["chain_id"],
-        config=XianClientConfig(vm_profile="xian_vm_v2"),
     ) as client:
         submission = await client.contract("currency").send(
             "transfer",
@@ -310,9 +305,7 @@ async def prepare_probe(config, *, revert):
             payload["kwargs"]["amountOutMin"] = {"__fixed__": "1000000000000"}
             prepared = replace(
                 prepared,
-                transaction=tr.prepare_transaction(
-                    tr.create_tx(payload, dex.client.wallet, vm_profile="xian_vm_v2")
-                ),
+                transaction=tr.prepare_transaction(tr.create_tx(payload, dex.client.wallet)),
             )
     return snapshot, prepared
 

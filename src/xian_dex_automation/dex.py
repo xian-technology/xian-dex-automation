@@ -195,7 +195,6 @@ class DexClient:
                 ),
                 batch_limit=100,
             ),
-            vm_profile="xian_vm_v2",
         )
         self._client = XianAsync(
             self.config.network.rpc_url,
@@ -395,7 +394,6 @@ class DexClient:
                     "chi_supplied": estimate["suggested"],
                 },
                 self.client.wallet,
-                vm_profile="xian_vm_v2",
             )
         )
         return PreparedSwap(self.client.node_url, chain_id, transaction)

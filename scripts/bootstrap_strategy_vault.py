@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from contracting.compilation.artifacts import compile_contract_source
-from xian_py import Wallet, Xian, XianClientConfig
+from xian_py import Wallet, Xian
 
 from xian_dex_automation.config import (
     AutomationConfig,
@@ -218,7 +218,6 @@ def _canonical_source_digest(*, module_name: str, source: str) -> str:
     canonical_source = compile_contract_source(
         module_name=module_name,
         source=source,
-        vm_profile="xian_vm_v2",
     )["source"]
     return hashlib.sha256(canonical_source.encode("utf-8")).hexdigest()
 
@@ -456,7 +455,6 @@ def main(argv: list[str] | None = None) -> int:
         rpc_url,
         chain_id=chain_id,
         wallet=owner_wallet,
-        config=XianClientConfig(vm_profile="xian_vm_v2"),
     ) as owner_client:
         existing_source = owner_client.get_contract_source(args.contract_name)
         deployed_now = existing_source is None
@@ -547,7 +545,6 @@ def main(argv: list[str] | None = None) -> int:
         rpc_url,
         chain_id=chain_id,
         wallet=owner_wallet,
-        config=XianClientConfig(vm_profile="xian_vm_v2"),
     ) as owner_client:
         keeper_balance = Decimal(
             str(
@@ -597,7 +594,6 @@ def main(argv: list[str] | None = None) -> int:
         rpc_url,
         chain_id=chain_id,
         wallet=owner_wallet,
-        config=XianClientConfig(vm_profile="xian_vm_v2"),
     ) as client:
         payload["on_chain_strategy"] = client.contract(args.contract_name).call("get_strategy")
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))
