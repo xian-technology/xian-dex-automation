@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from xian_py import transaction as tr
+from xian_runtime_types.decimal import CONTEXT as CONTRACTING_CONTEXT
 from xian_runtime_types.decimal import ContractingDecimal, canonical_fixed
 
 from .config import AutomationConfig, SwapExactInActionConfig
@@ -104,6 +105,16 @@ def decimal_value(value: Any) -> Decimal:
         return Decimal(str(value))
     except Exception as exc:
         raise DexAutomationError(f"expected numeric value, got {value!r}") from exc
+
+
+def floor_to_precision(amount: Decimal, precision: int | None) -> Decimal:
+    if precision is None:
+        return amount
+    return amount.quantize(
+        Decimal(1).scaleb(-precision),
+        rounding=decimal_module.ROUND_FLOOR,
+        context=CONTRACTING_CONTEXT,
+    )
 
 
 def with_basis_points(amount: Decimal, bps: int) -> Decimal:
@@ -252,14 +263,30 @@ class DexClient:
         src: str,
         amount_in: Decimal,
     ) -> Decimal:
-        reserve_in, reserve_out, _token_out = snapshot.reserves_for_src(src)
+        reserve_in, reserve_out, token_out = snapshot.reserves_for_src(src)
         fee_bps = await self.trade_fee_bps()
         if reserve_in <= 0 or reserve_out <= 0:
             raise DexAutomationError("pair has insufficient liquidity")
         amount_in_with_fee = ContractingDecimal(with_basis_points(amount_in, 10_000 - fee_bps))
         numerator = amount_in_with_fee * ContractingDecimal(canonical_fixed(reserve_out))
         denominator = ContractingDecimal(canonical_fixed(reserve_in)) + amount_in_with_fee
-        return Decimal(canonical_fixed(numerator / denominator))
+        quote = Decimal(canonical_fixed(numerator / denominator))
+        return floor_to_precision(quote, await self.token_precision(token_out))
+
+    async def token_precision(self, token: str) -> int | None:
+        """Mirror the router: precision comes from ``get_metadata()`` when exported."""
+        contract = self.client.contract(token)
+        try:
+            metadata = await contract.call("get_metadata")
+        except Exception as exc:
+            # Without a precision the quote stays unrounded, which can only make
+            # the minimum output stricter than the router's floored output.
+            logger.debug("no precision metadata for %s: %s", token, exc)
+            return None
+        precision = metadata.get("precision") if isinstance(metadata, dict) else None
+        if isinstance(precision, int) and precision >= 0:
+            return min(precision, 30)
+        return None
 
     async def transaction_deadline(
         self,

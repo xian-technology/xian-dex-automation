@@ -54,12 +54,64 @@ class FakeClient:
 
 def test_quote_and_slippage_use_the_contracts_scale() -> None:
     dex = DexClient(AutomationConfig())
+    dex._client = MetadataClient({})
     dex.trade_fee_bps = AsyncMock(return_value=0)
     snapshot = PairSnapshot(1, "currency", "con_token", Decimal("2"), Decimal("1"))
 
     quote = asyncio.run(dex.quote_exact_in(snapshot, src="currency", amount_in=Decimal(1)))
     assert quote == Decimal("0." + "3" * 30)
     assert with_basis_points(quote, 9999) == Decimal("0.3332" + "9" * 26)
+
+
+class MetadataContract:
+    def __init__(self, metadata) -> None:
+        self.metadata = metadata
+
+    async def call(self, function: str, **kwargs):
+        assert function == "get_metadata"
+        if isinstance(self.metadata, Exception):
+            raise self.metadata
+        return self.metadata
+
+
+class MetadataClient:
+    def __init__(self, metadata) -> None:
+        self.metadata = metadata
+
+    def contract(self, name: str) -> MetadataContract:
+        return MetadataContract(self.metadata.get(name, RuntimeError("no get_metadata")))
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"precision": 2}, Decimal("0.33")),
+        ({"precision": 0}, Decimal("0")),
+        ({"precision": 40}, Decimal("0." + "3" * 30)),
+        ({"precision": None}, Decimal("0." + "3" * 30)),
+        ({}, Decimal("0." + "3" * 30)),
+    ],
+)
+def test_quote_floors_output_to_the_token_precision_like_the_router(metadata, expected) -> None:
+    dex = DexClient(AutomationConfig())
+    dex._client = MetadataClient({"con_token": metadata})
+    dex.trade_fee_bps = AsyncMock(return_value=0)
+    snapshot = PairSnapshot(1, "currency", "con_token", Decimal("2"), Decimal("1"))
+
+    quote = asyncio.run(dex.quote_exact_in(snapshot, src="currency", amount_in=Decimal(1)))
+
+    assert quote == expected
+
+
+def test_quote_without_token_metadata_keeps_the_unrounded_output() -> None:
+    dex = DexClient(AutomationConfig())
+    dex._client = MetadataClient({})
+    dex.trade_fee_bps = AsyncMock(return_value=0)
+    snapshot = PairSnapshot(1, "currency", "con_token", Decimal("2"), Decimal("1"))
+
+    quote = asyncio.run(dex.quote_exact_in(snapshot, src="currency", amount_in=Decimal(1)))
+
+    assert quote == Decimal("0." + "3" * 30)
 
 
 def test_swap_exact_in_preserves_decimal_payloads() -> None:
