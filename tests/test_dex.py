@@ -103,6 +103,25 @@ def test_quote_floors_output_to_the_token_precision_like_the_router(metadata, ex
     assert quote == expected
 
 
+@pytest.mark.parametrize(
+    ("metadata", "precision"),
+    [
+        ({"precision": 40}, 30),
+        ({"precision": 30}, 30),
+        ({"precision": 6}, 6),
+        ({"precision": 0}, 0),
+        ({"precision": -1}, None),
+        ({"precision": "8"}, None),
+        (["precision", 8], None),
+    ],
+)
+def test_token_precision_never_exceeds_contract_decimal_places(metadata, precision) -> None:
+    dex = DexClient(AutomationConfig())
+    dex._client = MetadataClient({"con_token": metadata})
+
+    assert asyncio.run(dex.token_precision("con_token")) == precision
+
+
 def test_quote_without_token_metadata_keeps_the_unrounded_output() -> None:
     dex = DexClient(AutomationConfig())
     dex._client = MetadataClient({})
