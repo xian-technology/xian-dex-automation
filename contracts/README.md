@@ -62,3 +62,40 @@ only enable execution after the contract is funded and unpaused.
   the strategy budget is exhausted
 - owner key rotation is intentionally absent; use a deliberate owner wallet and
   withdraw before retiring the vault
+
+## Security: Accepted Risk Of The In-Transaction Price Check
+
+`execute_swap` checks the keeper's `amount_out_min` against
+`con_dex.getAmountsOut`, quoted inside the same transaction. That quote reads
+the pool as it is at execution time, so it is not an independent price
+reference: a transaction earlier in the same block can move the reserves
+first (a sandwich), and the vault then accepts any minimum within
+`max_slippage_bps` of the already-moved price.
+
+- An honest keeper still bounds the loss: the service derives
+  `amount_out_min` from its own quote before submitting, and the router
+  reverts when the output falls below it.
+- A compromised or colluding keeper can submit a loose `amount_out_min` and
+  pair it with a manipulated pool. The vault cannot tell that apart from a
+  real price move.
+
+What bounds the loss in that case is the rest of the on-chain envelope:
+at most `max_trade_size` per execution, at most `total_spend_cap` in total
+(which cannot be raised or replenished), at most one execution per
+`cooldown_seconds`, and output that stays in the vault. The owner can pause,
+withdraw and redeploy at any time; the keeper cannot withdraw or redirect
+funds.
+
+This is a known, accepted risk of the current version. Two mitigations were
+considered and not built yet:
+
+- **Owner-set minimum price:** the owner stores a floor (output per input)
+  that the keeper cannot change, and `execute_swap` rejects any
+  `amount_out_min` below `amount_in` times that floor. Simple and independent
+  of pool state, but the owner must maintain it as the market moves.
+- **DEX TWAP:** check against a time-weighted average price kept by the pair
+  contract, so moving the price for one block has little effect. This needs
+  price accumulators in `con_pairs` that the DEX does not provide today.
+
+Size `max_trade_size`, `total_spend_cap` and `cooldown_seconds` so that the
+worst case, a full `total_spend_cap` lost to manipulated pools, is acceptable.

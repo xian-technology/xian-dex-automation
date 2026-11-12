@@ -67,7 +67,10 @@ The off-chain service duplicates the intended vault envelope in
 trade size, slippage, cooldown, or deadline would exceed that envelope. At
 execution time `DexClient` submits `execute_swap` to the configured vault
 instead of calling the router directly. The contract remains the final security
-boundary if the service or its config is compromised.
+boundary if the service or its config is compromised. Its price check is quoted
+inside the executing transaction and can be moved by a sandwich; that risk is
+accepted and bounded by the trade size, spend cap and cooldown, see
+[`contracts/README.md`](../contracts/README.md#security-accepted-risk-of-the-in-transaction-price-check).
 
 The configured keeper address must match the public key derived from the
 service wallet key. Output recipient overrides are forbidden because all swap
