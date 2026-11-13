@@ -327,20 +327,6 @@ wheels = [
 ]
 
 [[package]]
-name = "lmdb"
-version = "2.2.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/ddef3e433950e23844fd9d82fa045637cbe84140f482120bbdf6abe6be92/lmdb-2.2.1.tar.gz", hash = "sha256:b201b416f7d6cea9bd2f977277a5f51d6e52a434d6ec511a8b34990df2b1a9c5", size = 938665 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/e0/58694bab6516a76850b702bb15a2d8775a685acd2c42caa45d4fe8eeb6b6/lmdb-2.2.1-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:e87bcf94a650d0ed53f647756504cb92287e9175ae5936755d18d173401bcb11", size = 117534 },
-    { url = "https://files.pythonhosted.org/packages/bc/87/48d2d6d02c78498d101969e41068b89187a54c4dcac7d8fdcc0ff8b16f40/lmdb-2.2.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:2e7f53effd229f71fedb524602a958f77359d4be83be9bef2434dc3e5e5159b5", size = 115769 },
-    { url = "https://files.pythonhosted.org/packages/69/8d/6918122b2fef6d42f8b3b198a95f4444be56563fd371f4ca076b1cd122f4/lmdb-2.2.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ee64993f7e9d983c098f5281b044ffdd7d398b636c7b232f5e72276d4bfd098b", size = 336740 },
-    { url = "https://files.pythonhosted.org/packages/de/f3/d490062cc7dbeeaea38ba9a091a7c484c1173d2fe3ba522fe0190a86dd42/lmdb-2.2.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a303e0c9d2e187e0304497ad3bb361d1ac359b55ce929d1aca2caec06582c134", size = 339753 },
-    { url = "https://files.pythonhosted.org/packages/9d/06/05572263ac9aa57971b485262368081b051909ef8d5142b086681a1bcd72/lmdb-2.2.1-cp314-cp314-win_amd64.whl", hash = "sha256:97ba48ab2db224009fa962dc84892bbbe693cdf1c367cc27c1a754ac8ec625c8", size = 115245 },
-    { url = "https://files.pythonhosted.org/packages/b2/22/c4c28854bd73bfc8e0dfc4d5228e5c9db3443e9c0fe14bbe1a2acdbd4c01/lmdb-2.2.1-cp314-cp314-win_arm64.whl", hash = "sha256:cf6372257b90530ac853aa43d35a714e49e4a9761599523d83d0258e336c1d84", size = 109973 },
-]
-
-[[package]]
 name = "multidict"
 version = "6.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -829,7 +815,6 @@ version = "1.1.4"
 source = { editable = "../xian-contracting" }
 dependencies = [
     { name = "cachetools" },
-    { name = "lmdb" },
     { name = "pynacl" },
     { name = "xian-tech-compiler-core" },
     { name = "xian-tech-runtime-types" },
@@ -839,7 +824,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cachetools", specifier = ">=7.0.6,<9" },
-    { name = "lmdb", specifier = ">=2.2.0,<4" },
     { name = "pynacl", specifier = ">=1.5.0,<2" },
     { name = "xian-tech-compiler-core", directory = "../xian-contracting/packages/xian-compiler-core" },
     { name = "xian-tech-fastpath-core", marker = "extra == 'native'", editable = "../xian-contracting/packages/xian-fastpath-core" },
@@ -852,6 +836,7 @@ provides-extras = ["v2", "native", "zk"]
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6.152.3,<7" },
+    { name = "lmdb", specifier = ">=2.2.0,<4" },
     { name = "pytest", specifier = ">=9.0.3,<10" },
     { name = "pytest-cov", specifier = ">=7.1.0,<8" },
     { name = "ruff", specifier = ">=0.15.12,<0.18" },
