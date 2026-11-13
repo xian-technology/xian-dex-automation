@@ -34,7 +34,6 @@ DEFAULT_NETWORK_PATH = DEFAULT_STACK_DIR / ".localnet" / "network.json"
 DEFAULT_CONTRACT_PATH = ROOT / "contracts" / "con_dex_strategy_vault.py"
 DEFAULT_KEEPER_KEY_PATH = ROOT / "state" / "strategy-vault-keeper.key"
 DEFAULT_CONFIG_PATH = ROOT / "state" / "strategy-vault.local.yaml"
-KEEPER_MIN_CHI_HEADROOM = 250
 
 
 class BootstrapError(RuntimeError):
@@ -46,7 +45,6 @@ class KeeperExercisePlan:
     call: ContractCallPlan
     details: dict[str, Any]
     estimated_chi: int
-    supplied_chi: int
     chi_cost: int
     required_currency: Decimal
 
@@ -268,12 +266,12 @@ def _deploy_vault(
     )
 
 
-def _required_keeper_currency(*, supplied_chi: int, chi_cost: int) -> Decimal:
-    if supplied_chi <= 0:
+def _required_keeper_currency(*, chi: int, chi_cost: int) -> Decimal:
+    if chi <= 0:
         raise BootstrapError("keeper chi estimate must be positive")
     if chi_cost <= 0:
         raise BootstrapError("chi_cost.current_value must be positive")
-    return Decimal((supplied_chi + chi_cost - 1) // chi_cost)
+    return Decimal((chi + chi_cost - 1) // chi_cost)
 
 
 async def _prepare_exercise(
@@ -299,15 +297,13 @@ async def _prepare_exercise(
             call.contract,
             call.function,
             call.kwargs,
-            min_chi_headroom=KEEPER_MIN_CHI_HEADROOM,
         )
         estimated_chi = int(estimate["estimated"])
-        supplied_chi = int(estimate["suggested"])
         chi_cost = int(
             await dex.client.contract("chi_cost").call("current_value")
         )
         required_currency = _required_keeper_currency(
-            supplied_chi=supplied_chi,
+            chi=estimated_chi,
             chi_cost=chi_cost,
         )
         details: dict[str, Any] = {
@@ -323,8 +319,6 @@ async def _prepare_exercise(
             },
             "chi": {
                 "estimated": estimated_chi,
-                "headroom": KEEPER_MIN_CHI_HEADROOM,
-                "supplied": supplied_chi,
                 "chi_cost": chi_cost,
                 "required_keeper_currency": str(required_currency),
             },
@@ -333,7 +327,6 @@ async def _prepare_exercise(
             call=call,
             details=details,
             estimated_chi=estimated_chi,
-            supplied_chi=supplied_chi,
             chi_cost=chi_cost,
             required_currency=required_currency,
         )
@@ -348,7 +341,7 @@ async def _exercise(
     async with DexClient(runtime) as dex:
         submission = await dex.submit_call_plan(
             plan.call,
-            chi=plan.supplied_chi,
+            chi=plan.estimated_chi,
         )
     result = dict(plan.details)
     result["mode"] = "execute"
@@ -391,7 +384,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Decimal("100"),
         help=(
             "minimum keeper currency floor; actual target is raised to the "
-            "ceil-divided live chi estimate plus explicit headroom"
+            "ceil-divided live chi estimate (the exact chi the swap supplies)"
         ),
     )
     parser.add_argument("--config-out", type=Path, default=DEFAULT_CONFIG_PATH)
@@ -559,8 +552,6 @@ def main(argv: list[str] | None = None) -> int:
         funding_details: dict[str, Any] = {
             "minimum_floor": str(args.keeper_gas_funding),
             "estimated_chi": exercise_plan.estimated_chi,
-            "chi_headroom": KEEPER_MIN_CHI_HEADROOM,
-            "supplied_chi": exercise_plan.supplied_chi,
             "chi_cost": exercise_plan.chi_cost,
             "required_from_estimate": str(
                 exercise_plan.required_currency

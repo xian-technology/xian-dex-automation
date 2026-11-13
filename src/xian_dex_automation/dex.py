@@ -418,7 +418,7 @@ class DexClient:
                     "function": plan.function,
                     "kwargs": plan.kwargs,
                     "nonce": nonce,
-                    "chi_supplied": estimate["suggested"],
+                    "chi_supplied": estimate["estimated"],
                 },
                 self.client.wallet,
             )

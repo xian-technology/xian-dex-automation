@@ -136,36 +136,79 @@ def test_keeper_gas_default_covers_standard_localnet_chi() -> None:
     assert args.keeper_gas_funding * 20 >= 2_000
 
 
-def test_dynamic_keeper_funding_covers_observed_estimate_with_headroom() -> None:
+def test_dynamic_keeper_funding_covers_exactly_the_observed_estimate() -> None:
     estimated = 2_585
-    supplied = estimated + bootstrap.KEEPER_MIN_CHI_HEADROOM
 
-    required = bootstrap._required_keeper_currency(
-        supplied_chi=supplied,
-        chi_cost=20,
-    )
+    required = bootstrap._required_keeper_currency(chi=estimated, chi_cost=20)
 
-    assert supplied == 2_835
-    assert required == 142
-    assert required * 20 >= supplied
-    assert (required - 1) * 20 < supplied
+    assert required == 130
+    assert required * 20 >= estimated
+    assert (required - 1) * 20 < estimated
 
 
 @pytest.mark.parametrize(
     ("chi_cost", "expected"),
-    [(7, Decimal("405")), (20, Decimal("142")), (30, Decimal("95"))],
+    [(7, Decimal("370")), (20, Decimal("130")), (30, Decimal("87"))],
 )
 def test_dynamic_keeper_funding_tracks_changing_chi_costs(
     chi_cost: int,
     expected: Decimal,
 ) -> None:
-    assert (
-        bootstrap._required_keeper_currency(
-            supplied_chi=2_835,
-            chi_cost=chi_cost,
+    assert bootstrap._required_keeper_currency(chi=2_585, chi_cost=chi_cost) == expected
+
+
+class _FakeDex:
+    def __init__(self, estimate_calls: list) -> None:
+        async def estimate_chi(contract, function, kwargs, **options):
+            estimate_calls.append(options)
+            return {"estimated": 2_585, "simulation": {"chi_used": 2_585}}
+
+        chi_cost = SimpleNamespace(call=AsyncMock(return_value=20))
+        self.client = SimpleNamespace(
+            estimate_chi=estimate_chi,
+            contract=lambda name: chi_cost,
         )
-        == expected
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get_pair_snapshot(self, pair_id):
+        return SimpleNamespace(pair_id=pair_id)
+
+    async def quote_exact_in(self, snapshot, *, src, amount_in):
+        return Decimal("4")
+
+    async def build_swap_exact_in_call(self, snapshot, action, *, amount_out_min):
+        return bootstrap.ContractCallPlan(
+            "con_vault", "execute_swap", {"min": amount_out_min}
+        )
+
+
+def test_keeper_exercise_plans_exactly_the_simulated_chi(monkeypatch, tmp_path) -> None:
+    estimate_calls: list = []
+    monkeypatch.setattr(bootstrap, "DexClient", lambda config: _FakeDex(estimate_calls))
+    args = bootstrap._build_parser().parse_args(
+        ["--keeper-private-key-file", str(tmp_path / "keeper.key")]
     )
+    config = bootstrap._service_config(
+        args,
+        rpc_url="http://127.0.0.1:26657",
+        chain_id="xian-local",
+        keeper_address="b" * 64,
+    )
+
+    plan = asyncio.run(bootstrap._prepare_exercise(config))
+
+    assert estimate_calls == [{}]
+    assert (plan.estimated_chi, plan.chi_cost, plan.required_currency) == (2_585, 20, 130)
+    assert plan.details["chi"] == {
+        "estimated": 2_585,
+        "chi_cost": 20,
+        "required_keeper_currency": "130",
+    }
 
 
 def test_rejected_keeper_submission_is_never_reported_as_success() -> None:

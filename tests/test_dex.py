@@ -273,7 +273,7 @@ def test_prepare_call_uses_sdk_bytes_and_does_not_broadcast(monkeypatch):
         node_url="http://127.0.0.1:26657",
         session=object(),
         get_chain_id=AsyncMock(return_value="xian-local"),
-        estimate_chi=AsyncMock(return_value={"suggested": 1234}),
+        estimate_chi=AsyncMock(return_value={"estimated": 1234, "simulation": {}}),
     )
     monkeypatch.setattr("xian_py.transaction.get_nonce_async", AsyncMock(return_value=7))
     broadcast = AsyncMock()

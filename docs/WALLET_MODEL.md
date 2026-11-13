@@ -114,12 +114,13 @@ uv run --extra dev python scripts/bootstrap_strategy_vault.py --execute
 ```
 
 The helper treats 100 currency as a minimum floor. Once the exact keeper call
-kwargs are known, it estimates that same call with 250 chi of explicit
-headroom, reads `chi_cost.current_value()`, and raises the target to
-`ceil(supplied_chi / chi_cost)` when necessary. `--keeper-gas-funding` remains
-an operator-specified minimum override. The prepared call plan and supplied chi
-are reused unchanged for submission, and the safe JSON output includes all
-funding inputs and the resulting top-up.
+kwargs are known, it estimates that same call, reads
+`chi_cost.current_value()`, and raises the target to
+`ceil(estimated_chi / chi_cost)` when necessary. `--keeper-gas-funding` remains
+an operator-specified minimum override. The prepared call plan and the
+estimated chi (supplied exactly, with no headroom) are reused unchanged for
+submission, and the safe JSON output includes all funding inputs and the
+resulting top-up.
 
 Also submit one real keeper-triggered vault swap:
 
