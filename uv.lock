@@ -884,11 +884,11 @@ name = "xian-tech-vm-core"
 version = "0.1.3"
 source = { directory = "../xian-contracting/packages/xian-vm-core" }
 dependencies = [
-    { name = "xian-tech-contracting" },
+    { name = "xian-tech-runtime-types" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "xian-tech-contracting", editable = "../xian-contracting" }]
+requires-dist = [{ name = "xian-tech-runtime-types", editable = "../xian-contracting/packages/xian-runtime-types" }]
 
 [[package]]
 name = "yarl"
