@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from contracting.compilation.artifacts import compile_contract_source
-from xian_py import Wallet, Xian
+from xian_py import Wallet, Xian, chi_to_supply
 
 from xian_dex_automation.config import (
     AutomationConfig,
@@ -44,7 +44,7 @@ class BootstrapError(RuntimeError):
 class KeeperExercisePlan:
     call: ContractCallPlan
     details: dict[str, Any]
-    estimated_chi: int
+    supplied_chi: int
     chi_cost: int
     required_currency: Decimal
 
@@ -299,11 +299,12 @@ async def _prepare_exercise(
             call.kwargs,
         )
         estimated_chi = int(estimate["estimated"])
+        supplied_chi = chi_to_supply(estimated_chi)
         chi_cost = int(
             await dex.client.contract("chi_cost").call("current_value")
         )
         required_currency = _required_keeper_currency(
-            chi=estimated_chi,
+            chi=supplied_chi,
             chi_cost=chi_cost,
         )
         details: dict[str, Any] = {
@@ -319,6 +320,7 @@ async def _prepare_exercise(
             },
             "chi": {
                 "estimated": estimated_chi,
+                "supplied": supplied_chi,
                 "chi_cost": chi_cost,
                 "required_keeper_currency": str(required_currency),
             },
@@ -326,7 +328,7 @@ async def _prepare_exercise(
         return KeeperExercisePlan(
             call=call,
             details=details,
-            estimated_chi=estimated_chi,
+            supplied_chi=supplied_chi,
             chi_cost=chi_cost,
             required_currency=required_currency,
         )
@@ -341,7 +343,7 @@ async def _exercise(
     async with DexClient(runtime) as dex:
         submission = await dex.submit_call_plan(
             plan.call,
-            chi=plan.estimated_chi,
+            chi=plan.supplied_chi,
         )
     result = dict(plan.details)
     result["mode"] = "execute"
@@ -551,7 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         top_up = max(Decimal(0), funding_target - keeper_balance)
         funding_details: dict[str, Any] = {
             "minimum_floor": str(args.keeper_gas_funding),
-            "estimated_chi": exercise_plan.estimated_chi,
+            "supplied_chi": exercise_plan.supplied_chi,
             "chi_cost": exercise_plan.chi_cost,
             "required_from_estimate": str(
                 exercise_plan.required_currency

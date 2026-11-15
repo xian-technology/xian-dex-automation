@@ -290,7 +290,7 @@ def test_prepare_call_uses_sdk_bytes_and_does_not_broadcast(monkeypatch):
     payload = json.loads(prepared.transaction.json_bytes)["payload"]
     assert payload["kwargs"] == {"amountIn": {"__fixed__": "5.25"}}
     assert payload["nonce"] == 7
-    assert payload["chi_supplied"] == 1234
+    assert payload["chi_supplied"] == 1236  # the estimate plus the SDK margin
     assert payload["sender"] == wallet.public_key
     assert prepared.transaction == prepare_transaction(prepared.transaction.json_bytes)
     broadcast.assert_not_called()

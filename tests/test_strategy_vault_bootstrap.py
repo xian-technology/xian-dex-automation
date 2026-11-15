@@ -187,7 +187,7 @@ class _FakeDex:
         )
 
 
-def test_keeper_exercise_plans_exactly_the_simulated_chi(monkeypatch, tmp_path) -> None:
+def test_keeper_exercise_plans_the_simulated_chi_plus_the_margin(monkeypatch, tmp_path) -> None:
     estimate_calls: list = []
     monkeypatch.setattr(bootstrap, "DexClient", lambda config: _FakeDex(estimate_calls))
     args = bootstrap._build_parser().parse_args(
@@ -203,9 +203,10 @@ def test_keeper_exercise_plans_exactly_the_simulated_chi(monkeypatch, tmp_path) 
     plan = asyncio.run(bootstrap._prepare_exercise(config))
 
     assert estimate_calls == [{}]
-    assert (plan.estimated_chi, plan.chi_cost, plan.required_currency) == (2_585, 20, 130)
+    assert (plan.supplied_chi, plan.chi_cost, plan.required_currency) == (2_587, 20, 130)
     assert plan.details["chi"] == {
         "estimated": 2_585,
+        "supplied": 2_587,
         "chi_cost": 20,
         "required_keeper_currency": "130",
     }

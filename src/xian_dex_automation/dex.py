@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from xian_py import chi_to_supply
 from xian_py import transaction as tr
 from xian_runtime_types.decimal import CONTEXT as CONTRACTING_CONTEXT
 from xian_runtime_types.decimal import ContractingDecimal, canonical_fixed
@@ -418,7 +419,7 @@ class DexClient:
                     "function": plan.function,
                     "kwargs": plan.kwargs,
                     "nonce": nonce,
-                    "chi_supplied": estimate["estimated"],
+                    "chi_supplied": chi_to_supply(estimate["estimated"]),
                 },
                 self.client.wallet,
             )
