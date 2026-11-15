@@ -862,7 +862,7 @@ requires-dist = [
     { name = "pynacl", specifier = ">=1.5.0,<2" },
     { name = "uvicorn", marker = "extra == 'app'", specifier = ">=0.46.0,<0.47" },
     { name = "xian-tech-accounts", editable = "../xian-contracting/packages/xian-accounts" },
-    { name = "xian-tech-contracting", marker = "extra == 'compile'", editable = "../xian-contracting" },
+    { name = "xian-tech-compiler-core", marker = "extra == 'compile'", directory = "../xian-contracting/packages/xian-compiler-core" },
     { name = "xian-tech-runtime-types", editable = "../xian-contracting/packages/xian-runtime-types" },
 ]
 provides-extras = ["compile", "hd", "eth", "app"]
