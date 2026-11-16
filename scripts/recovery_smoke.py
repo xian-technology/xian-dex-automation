@@ -401,6 +401,10 @@ async def missing_receipt_then_independent(settings, config, store, *, success):
             if attempt == 0:
                 followup = await settle(worker)
                 require_submitted(followup, "independent rule did not submit")
+                # settle() sees the receipt on one node; the checks below read
+                # another validator, whose nonce already counts the mempool
+                # copy. Wait until every validator committed the swap.
+                independent_nodes = await verify_nodes(settings, [(followup["tx_hash"], True)])
                 await assert_one_swap(target, before)
                 changed = target.model_copy(deep=True)
                 changed.network.rpc_url = settings["rpc_urls"][2]
@@ -418,7 +422,6 @@ async def missing_receipt_then_independent(settings, config, store, *, success):
     require(store.uncertain_execution(original.id) is None, "restored receipt did not release rule")
     require(len(store.list_runs()) == run_count + 1, "receipt restoration created another trade")
     await assert_one_swap(target, before)
-    independent_nodes = await verify_nodes(settings, [(followup["tx_hash"], True)])
     return target, {
         "original": prepared.transaction.tx_hash,
         "independent": followup["tx_hash"],
