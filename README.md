@@ -200,9 +200,12 @@ optional sidecar:
 ```bash
 cd ../xian-stack
 export XIAN_DEX_AUTOMATION_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-python3 ./scripts/backend.py start     --no-bds-enabled --dex-automation
-python3 ./scripts/backend.py endpoints --no-bds-enabled --dex-automation
+python3 ./scripts/backend.py start     --bds-enabled --dex-automation
+python3 ./scripts/backend.py endpoints --bds-enabled --dex-automation
 ```
+
+The event worker requires BDS-backed `con_pairs.Sync` history for its saved
+cursor. Manual evaluation and pending-transaction recovery use direct RPC reads.
 
 Default URL: `http://127.0.0.1:38280`. The stack-managed path creates a
 dedicated local key file at
