@@ -457,16 +457,18 @@ class AutomationStore:
             ).fetchone()
         return int(row["cursor"]) if row and row["cursor"] is not None else None
 
-    def save_cursor(self, name: str, cursor: int) -> None:
+    def save_cursor(self, name: str, cursor: int, *, generation: int) -> None:
         with self.connect() as connection:
+            # Check the watcher's generation in the same write as the cursor.
             connection.execute(
                 """
                 insert into cursors (name, cursor, updated_at)
-                values (?, ?, ?)
+                select ?, ?, ?
+                where coalesce((select generation from runtime_config where slot = 1), 0) = ?
                 on conflict(name) do update set
                     cursor = excluded.cursor,
                     updated_at = excluded.updated_at
                 where cursors.cursor is null or excluded.cursor > cursors.cursor
                 """,
-                (name, cursor, _utc_now_iso()),
+                (name, cursor, _utc_now_iso(), generation),
             )

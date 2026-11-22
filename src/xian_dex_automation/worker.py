@@ -119,8 +119,8 @@ class AutomationWorker:
                     raise ConfigurationChanged()
                 self.retry_reporter.recovered()
                 if event.id is not None:
-                    self.store.save_cursor(cursor_name, int(event.id))
                     cursor = int(event.id)
+                    self.store.save_cursor(cursor_name, cursor, generation=self.config_generation)
 
     async def _evaluate_event_pair(self, dex: DexClient, pair_id: int) -> None:
         while True:

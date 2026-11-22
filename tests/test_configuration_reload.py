@@ -156,7 +156,7 @@ def test_reload_keeps_cooldown_but_reinitializes_changed_market_state(tmp_path, 
     worker, store, rule = make_worker(tmp_path, execute=False)
     now = datetime.now(UTC)
     store.save_rule_state(rule.id, RuleRuntimeState(Decimal("1"), now))
-    store.save_cursor("con_pairs:Sync", 42)
+    store.save_cursor("con_pairs:Sync", 42, generation=store.config_generation())
     target = worker.config.model_copy(deep=True)
     if change == "rpc":
         target.network.rpc_url = "http://127.0.0.1:26658"

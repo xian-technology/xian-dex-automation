@@ -34,7 +34,7 @@ def test_runs_and_cursor_round_trip(tmp_path) -> None:
         tx_hash=None,
         details={"pair_id": 1},
     )
-    store.save_cursor("con_pairs:Sync", 42)
+    store.save_cursor("con_pairs:Sync", 42, generation=store.config_generation())
 
     assert store.get_cursor("con_pairs:Sync") == 42
     runs = store.list_runs()
@@ -45,6 +45,6 @@ def test_runs_and_cursor_round_trip(tmp_path) -> None:
 def test_competing_watchers_cannot_move_cursor_backwards(tmp_path):
     store = AutomationStore(tmp_path / "automation.sqlite3")
     other = AutomationStore(store.path)
-    store.save_cursor("con_pairs:Sync", 42)
-    other.save_cursor("con_pairs:Sync", 41)
+    store.save_cursor("con_pairs:Sync", 42, generation=store.config_generation())
+    other.save_cursor("con_pairs:Sync", 41, generation=other.config_generation())
     assert store.get_cursor("con_pairs:Sync") == 42
