@@ -890,7 +890,7 @@ source = { editable = "../xian-contracting/packages/xian-runtime-types" }
 
 [[package]]
 name = "xian-tech-vm-core"
-version = "0.1.3"
+version = "0.1.4"
 source = { directory = "../xian-contracting/packages/xian-vm-core" }
 dependencies = [
     { name = "xian-tech-runtime-types" },
