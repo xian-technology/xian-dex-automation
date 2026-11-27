@@ -66,8 +66,7 @@ class SwapTransport:
     async def nonce_consumed(self) -> bool:
         await self._check_chain()
         payload = json.loads(self.prepared.transaction.json_bytes)["payload"]
-        # /get_next_nonce includes mempool reservations. Read the committed
-        # nonce storage key (__n.<sender>:) instead, through the SDK state API.
+        # Persisted swaps are reconciled against committed state on the original chain.
         nonce = await self.client.get_state("__n", payload["sender"], "")
         if nonce is None:
             return False
