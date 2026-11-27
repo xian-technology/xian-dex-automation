@@ -401,9 +401,8 @@ async def missing_receipt_then_independent(settings, config, store, *, success):
             if attempt == 0:
                 followup = await settle(worker)
                 require_submitted(followup, "independent rule did not submit")
-                # settle() sees the receipt on one node; the checks below read
-                # another validator, whose nonce already counts the mempool
-                # copy. Wait until every validator committed the swap.
+                # settle() sees the receipt on one node. Wait for every
+                # validator to commit before checking balances on a different RPC.
                 independent_nodes = await verify_nodes(settings, [(followup["tx_hash"], True)])
                 await assert_one_swap(target, before)
                 changed = target.model_copy(deep=True)
